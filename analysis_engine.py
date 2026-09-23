@@ -97,7 +97,8 @@ def fetch_live_commodities() -> Dict[str, Any]:
             _price_cache["updated"] = datetime.now(timezone.utc).isoformat()
             
             # Store in DB
-            with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+            from database import DB_PATH
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
                 for k in ["brent", "wti", "natgas"]:
                     p = results.get(k)
                     if p is not None:

@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
+from database import DB_PATH
+
 logger = logging.getLogger(__name__)
 
 SOURCES = [
@@ -85,7 +87,7 @@ def _detect_severity(text: str) -> str:
 
 def _save_incidents(incidents: list):
     new_count = 0
-    with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         for inc in incidents:
             # Deduplicate by title
             exists = conn.execute(
@@ -184,7 +186,7 @@ def harvest_incidents_from_news():
         "explosion", "fire", "warning", "advisory", "suspicious", "strait of hormuz",
         "red sea", "bab el-mandeb", "gulf of aden", "strait crossings"
     ]
-    with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT title, summary, link, source, published, created_at FROM news ORDER BY id DESC LIMIT 50").fetchall()
 

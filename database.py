@@ -1,9 +1,25 @@
+import os
+import shutil
 import sqlite3
 import logging
 
+import tempfile
+
 logger = logging.getLogger(__name__)
 
-DB_PATH = "oilwatch.db"
+# On Vercel / AWS Lambda / Serverless platforms, only temp dir is writable
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    tmp_dir = tempfile.gettempdir()
+    os.makedirs(tmp_dir, exist_ok=True)
+    DB_PATH = os.path.join(tmp_dir, "oilwatch.db")
+    if not os.path.exists(DB_PATH) and os.path.exists("oilwatch.db"):
+        try:
+            shutil.copyfile("oilwatch.db", DB_PATH)
+            logger.info(f"Copied seeded oilwatch.db to {DB_PATH}")
+        except Exception as e:
+            logger.warning(f"Could not copy seeded db to temp: {e}")
+else:
+    DB_PATH = "oilwatch.db"
 
 
 def get_conn() -> sqlite3.Connection:

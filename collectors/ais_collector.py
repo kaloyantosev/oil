@@ -84,7 +84,8 @@ def classify_vessel(length: int, draught: float = 0, sog: float = 0) -> dict:
 
 def _save_vessel_sync(vessel: dict):
     """Write vessel to SQLite (blocking — call via asyncio.to_thread)."""
-    with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+    from database import DB_PATH
+    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         conn.execute("""
             INSERT INTO vessels
                 (mmsi, name, lat, lon, sog, cog, heading, ship_type,
@@ -212,7 +213,8 @@ async def _process_message(msg: dict, broadcast):
 
 def _init_cache_from_db():
     try:
-        with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+        from database import DB_PATH
+        with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
             rows = conn.execute(
                 "SELECT mmsi, name, ship_type, length, destination, callsign, draught FROM vessels WHERE ship_type BETWEEN 80 AND 89"
             ).fetchall()

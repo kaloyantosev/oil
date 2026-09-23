@@ -63,34 +63,34 @@ manager = ConnectionManager()
 async def _download_shipping_lanes():
     """Download the shipping lanes GeoJSON from GitHub if not cached locally."""
     path = Path("static/data/shipping_lanes.geojson")
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    if path.exists() and path.stat().st_size > 10_000:
-        logger.info("Shipping lanes already cached.")
-        return
-
-    url = (
-        "https://raw.githubusercontent.com/newzealandpaul/"
-        "Shipping-Lanes/main/data/Shipping_Lanes_v1.geojson"
-    )
-    logger.info("Downloading shipping lanes GeoJSON...")
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > 10_000:
+            logger.info("Shipping lanes already cached.")
+            return
+
+        url = (
+            "https://raw.githubusercontent.com/newzealandpaul/"
+            "Shipping-Lanes/main/data/Shipping_Lanes_v1.geojson"
+        )
+        logger.info("Downloading shipping lanes GeoJSON...")
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             r = await client.get(url)
             if r.status_code == 200:
                 async with aiofiles.open(path, "wb") as f:
                     await f.write(r.content)
                 logger.info(f"✓ Shipping lanes downloaded ({len(r.content) / 1024:.0f} KB)")
             else:
-                logger.warning(f"Shipping lanes download failed: HTTP {r.status_code}")
                 _write_empty_geojson(path)
     except Exception as e:
-        logger.warning(f"Shipping lanes download error: {e}")
-        _write_empty_geojson(path)
+        logger.warning(f"Shipping lanes download skipped or filesystem read-only: {e}")
 
 
 def _write_empty_geojson(path: Path):
-    path.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    try:
+        path.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    except Exception:
+        pass
 
 
 @asynccontextmanager
@@ -106,10 +106,18 @@ async def lifespan(app: FastAPI):
     # Seed Hormuz corridor fleet immediately so map has tankers from second 1
     init_hormuz_fleet()
     await _download_shipping_lanes()
-    start_scheduler()
 
-    ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
-    hormuz_task = asyncio.create_task(run_hormuz_fleet_loop(manager.broadcast))
+    is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    ais_task = None
+    hormuz_task = None
+
+    if not is_serverless:
+        start_scheduler()
+        ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
+        hormuz_task = asyncio.create_task(run_hormuz_fleet_loop(manager.broadcast))
+        logger.info("✓ OilWatch background daemons and schedulers active.")
+    else:
+        logger.info("✓ OilWatch running in serverless mode (Vercel/Lambda).")
 
     logger.info("✓ OilWatch server initialized successfully.")
     logger.info("-" * 50)
@@ -117,9 +125,12 @@ async def lifespan(app: FastAPI):
     yield  # Server is running
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
-    ais_task.cancel()
-    hormuz_task.cancel()
-    stop_scheduler()
+    if ais_task:
+        ais_task.cancel()
+    if hormuz_task:
+        hormuz_task.cancel()
+    if not is_serverless:
+        stop_scheduler()
     logger.info("OilWatch stopped.")
 
 

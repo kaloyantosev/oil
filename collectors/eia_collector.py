@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import requests
 
 from config import settings
+from database import DB_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ def fetch_oil_prices():
                 logger.warning(f"EIA returned no data for {q['product']}")
                 continue
 
-            with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
                 for item in items[:3]:
                     period = item.get("period", "")
                     value  = item.get("value")

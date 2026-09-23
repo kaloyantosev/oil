@@ -132,7 +132,8 @@ def fetch_news():
                         published = datetime.now(timezone.utc).isoformat()
 
                 # Skip duplicates
-                with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+                from database import DB_PATH
+                with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
                     if conn.execute(
                         "SELECT id FROM news WHERE link=?", (link,)
                     ).fetchone():
@@ -143,7 +144,7 @@ def fetch_news():
                 sentiment = _classify_sentiment(title, summary)
 
                 # Store in DB
-                with sqlite3.connect("oilwatch.db", check_same_thread=False) as conn:
+                with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
                     conn.execute("""
                         INSERT OR IGNORE INTO news
                             (title, link, source, published, summary, ai_brief, sentiment)

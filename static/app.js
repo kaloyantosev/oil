@@ -1061,6 +1061,64 @@ function handleSyncZoom(delta) {
   });
 }
 
+// ── WebSocket & Live Stream Connection ───────────────────────────────────────
+let wsPollingFallbackInterval = null;
+
+function startVesselPollingFallback() {
+  if (wsPollingFallbackInterval) return;
+  console.log('Activating REST polling fallback for vessels (cloud/serverless mode)');
+  wsPollingFallbackInterval = setInterval(loadInitialVessels, 10000);
+}
+
+function connectWS() {
+  try {
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      console.log('✓ Connected to live vessel stream via WebSocket');
+      const dot = document.getElementById('update-dot');
+      if (dot) dot.classList.add('live');
+      if (wsPollingFallbackInterval) {
+        clearInterval(wsPollingFallbackInterval);
+        wsPollingFallbackInterval = null;
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'vessel' && msg.data) {
+          upsertVessel(msg.data);
+          if (msg.data.updated_at) {
+            updateLastSeenTimestamp(msg.data.updated_at);
+          }
+        }
+      } catch (err) {
+        console.warn('Error parsing incoming WS message:', err);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.warn('WebSocket unavailable or failed, switching to REST polling:', err);
+      startVesselPollingFallback();
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket closed. Active fallback: polling /api/vessels.');
+      startVesselPollingFallback();
+      // Try to reconnect in 15 seconds if on standard persistent host
+      setTimeout(() => {
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+          connectWS();
+        }
+      }, 15000);
+    };
+  } catch (err) {
+    console.warn('WebSocket not supported in this environment, using REST polling:', err);
+    startVesselPollingFallback();
+  }
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function loadInitialVessels() {
   try {
