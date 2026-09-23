@@ -1,0 +1,82 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "hormuz",
+        "name": "Strait of Hormuz",
+        "description": "Gateway for Persian Gulf oil exports. ~20% of global oil trade passes here — 17–21 million bbl/day. Iran controls the northern shore.",
+        "volume_mbpd": 21,
+        "risk_level": "high"
+      },
+      "geometry": { "type": "Point", "coordinates": [56.49, 26.57] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bab_el_mandeb",
+        "name": "Bab el-Mandeb Strait",
+        "description": "Entrance to the Red Sea. ~5–6 million bbl/day. Yemen conflict and Houthi drone/missile activity have disrupted traffic since late 2023.",
+        "volume_mbpd": 6,
+        "risk_level": "high"
+      },
+      "geometry": { "type": "Point", "coordinates": [43.46, 12.60] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "malacca",
+        "name": "Strait of Malacca",
+        "description": "Main Asia-Pacific oil artery. ~16 million bbl/day. Connects the Indian Ocean to the South China Sea. Malaysia, Indonesia, and Singapore control the shores.",
+        "volume_mbpd": 16,
+        "risk_level": "medium"
+      },
+      "geometry": { "type": "Point", "coordinates": [103.83, 1.26] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "suez",
+        "name": "Suez Canal",
+        "description": "Europe–Asia shortcut. Saves 7–14 days vs. Cape of Good Hope. ~9 million bbl/day equivalent. Egyptian government authority (Suez Canal Authority) controls access.",
+        "volume_mbpd": 9,
+        "risk_level": "medium"
+      },
+      "geometry": { "type": "Point", "coordinates": [32.30, 30.50] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "panama",
+        "name": "Panama Canal",
+        "description": "Americas oil and LNG corridor. ~0.8 million bbl/day. Drought conditions in 2023–24 reduced draft limits, forcing rerouting. Panama Canal Authority controls transit.",
+        "volume_mbpd": 0.8,
+        "risk_level": "medium"
+      },
+      "geometry": { "type": "Point", "coordinates": [-79.91, 9.08] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "bosphorus",
+        "name": "Turkish Straits (Bosphorus)",
+        "description": "Black Sea oil outlet to the Mediterranean. ~2.4 million bbl/day, primarily Russian crude and Caspian oil. Turkey controls transit under the Montreux Convention.",
+        "volume_mbpd": 2.4,
+        "risk_level": "medium"
+      },
+      "geometry": { "type": "Point", "coordinates": [29.12, 41.12] }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "cape_good_hope",
+        "name": "Cape of Good Hope",
+        "description": "Bypass route used when Red Sea is blocked. Adds 7–14 days and $1–2M extra fuel cost per voyage to European routes. Shipping surge here signals Red Sea crisis.",
+        "volume_mbpd": 4,
+        "risk_level": "low"
+      },
+      "geometry": { "type": "Point", "coordinates": [18.47, -34.36] }
+    }
+  ]
+}

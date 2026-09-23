@@ -1,0 +1,1 @@
+# OilWatch collectors package
