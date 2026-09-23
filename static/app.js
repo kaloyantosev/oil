@@ -7,7 +7,8 @@
 'use strict';
 
 // ── Config ───────────────────────────────────────────────────────────────────
-const WS_URL     = `ws://${location.host}/ws/vessels`;
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL     = `${wsProtocol}//${location.host}/ws/vessels`;
 const API        = '/api';
 const NEWS_MS    = 5  * 60 * 1000;   // refresh news every 5 min
 const PRICE_MS   = 15 * 60 * 1000;   // refresh prices every 15 min
@@ -378,7 +379,13 @@ function updateLastSeenTimestamp(isoDateStr) {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function connectWS() {
   setStatus('connecting');
-  ws = new WebSocket(WS_URL);
+  try {
+    ws = new WebSocket(WS_URL);
+  } catch (e) {
+    console.warn('WebSocket init exception:', e);
+    setTimeout(connectWS, 4000);
+    return;
+  }
 
   ws.onopen = () => {
     setStatus('live');
@@ -1071,6 +1078,11 @@ async function loadInitialVessels() {
 }
 
 async function init() {
+  const hostEl = document.getElementById('footer-host');
+  if (hostEl && location.host) {
+    hostEl.textContent = `OilWatch v1.1 · ${location.host}`;
+  }
+
   initMap();
   connectWS();
   startClock();

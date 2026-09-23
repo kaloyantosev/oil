@@ -101,14 +101,17 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 50)
 
     init_db()
+    from collectors.hormuz_fleet import init_hormuz_fleet, run_hormuz_fleet_loop
+
+    # Seed Hormuz corridor fleet immediately so map has tankers from second 1
+    init_hormuz_fleet()
     await _download_shipping_lanes()
     start_scheduler()
 
     ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
-    from collectors.hormuz_fleet import run_hormuz_fleet_loop
     hormuz_task = asyncio.create_task(run_hormuz_fleet_loop(manager.broadcast))
 
-    logger.info("✓ OilWatch is live → http://localhost:8000")
+    logger.info("✓ OilWatch server initialized successfully.")
     logger.info("-" * 50)
 
     yield  # Server is running
@@ -121,7 +124,19 @@ async def lifespan(app: FastAPI):
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="OilWatch", version="1.0.0", lifespan=lifespan)
+
+# Enable CORS for online cloud hosting and reverse proxies
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -234,11 +249,14 @@ async def ws_vessels(websocket: WebSocket):
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import os
     import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting OilWatch on port {port}...")
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info",
         access_log=False,
     )
