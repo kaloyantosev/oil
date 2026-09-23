@@ -59,10 +59,14 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+BASE_DIR   = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+
+
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
 async def _download_shipping_lanes():
     """Download the shipping lanes GeoJSON from GitHub if not cached locally."""
-    path = Path("static/data/shipping_lanes.geojson")
+    path = STATIC_DIR / "data" / "shipping_lanes.geojson"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and path.stat().st_size > 10_000:
@@ -148,13 +152,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @app.get("/", include_in_schema=False)
 async def root():
-    return FileResponse("static/index.html")
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 @app.get("/health")
