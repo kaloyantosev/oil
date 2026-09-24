@@ -165,11 +165,16 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @app.get("/", include_in_schema=False)
+@app.get("/api", include_in_schema=False)
+@app.get("/api/", include_in_schema=False)
+@app.get("/api/index.py", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
 async def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     return {
         "status": "ok",
@@ -182,6 +187,7 @@ async def health():
 
 
 @app.get("/api/vessels")
+@app.get("/vessels")
 async def api_vessels():
     from collectors.ais_collector import classify_vessel
     from database import get_latest_vessel_timestamp
@@ -195,24 +201,28 @@ async def api_vessels():
 
 
 @app.get("/api/news")
+@app.get("/news")
 async def api_news(limit: int = 25):
     news = await asyncio.to_thread(get_news, limit)
     return {"news": news, "count": len(news)}
 
 
 @app.get("/api/oil-prices")
+@app.get("/oil-prices")
 async def api_oil_prices():
     prices = await asyncio.to_thread(get_oil_prices)
     return {"prices": prices}
 
 
 @app.get("/api/incidents")
+@app.get("/incidents")
 async def api_incidents():
     incidents = await asyncio.to_thread(get_incidents)
     return {"incidents": incidents}
 
 
 @app.get("/api/analysis")
+@app.get("/analysis")
 async def api_analysis():
     from analysis_engine import fetch_live_commodities, calculate_fair_value_model, get_ai_macro_analysis, GLOBAL_COST_TRUCTURE
     # 1. Fetch live commodity market quotes (Brent, WTI, NatGas, Crack Spread, Term Structure)
@@ -240,6 +250,7 @@ async def api_analysis():
 
 
 @app.get("/api/historical-data")
+@app.get("/historical-data")
 async def api_historical_data():
     from analysis_engine import get_10y_historical_data
     data = await asyncio.to_thread(get_10y_historical_data)
