@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OilWatch — Global Oil Shipping & Market Intelligence</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ──────────────────────────────────────────────── -->
+  <header id="header">
+    <div id="logo">
+      <span class="tanker-icon">🛢</span>OilWatch
+      <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 6px;">Global Oil Shipping Intelligence</span>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="nav-tab active" id="tab-map-btn" onclick="switchView('map')">
+        🗺️ Live Fleet & Chokepoints
+      </button>
+      <button class="nav-tab" id="tab-analysis-btn" onclick="switchView('analysis')">
+        📊 Price Discovery & Valuation Model
+      </button>
+    </div>
+
+    <div id="hdr-right">
+      <div id="last-update-box">
+        <span class="dot live" id="update-dot"></span>
+        <span class="update-lbl">LAST UPDATED:</span>
+        <span id="vessel-last-updated" class="update-timestamp">Awaiting AIS data...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main ────────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- VIEW 1: MAP VIEW -->
+    <div id="view-map" class="view-panel active">
+      <!-- Leaflet Map -->
+      <div id="map"></div>
+
+      <!-- Stats & Filter Bar (top-left) -->
+      <div id="map-controls">
+        <div id="map-stats">
+          <div class="stat-card">
+            <div class="stat-label">Major Tankers</div>
+            <div class="stat-val" id="vessel-count">0</div>
+          </div>
+          <div class="stat-card clickable" id="stat-incidents-card" onclick="showIncidentsFeed()" title="Click to open active maritime incidents feed">
+            <div class="stat-label">Active Incidents ↗</div>
+            <div class="stat-val" id="incident-count" style="color:var(--danger)">0</div>
+          </div>
+        </div>
+
+        <div id="vessel-filters">
+          <button class="vfilter-btn active" data-class="all" onclick="setVesselFilter('all')">
+            All <span class="vf-badge" id="vf-all">0</span>
+          </button>
+          <button class="vfilter-btn" data-class="VLCC" onclick="setVesselFilter('VLCC')">
+            <span class="vf-dot" style="background:#f59e0b"></span>VLCC <span class="vf-badge" id="vf-vlcc">0</span>
+          </button>
+          <button class="vfilter-btn" data-class="Suezmax" onclick="setVesselFilter('Suezmax')">
+            <span class="vf-dot" style="background:#00d4ff"></span>Suezmax <span class="vf-badge" id="vf-suez">0</span>
+          </button>
+          <button class="vfilter-btn" data-class="Aframax" onclick="setVesselFilter('Aframax')">
+            <span class="vf-dot" style="background:#10b981"></span>Aframax <span class="vf-badge" id="vf-afra">0</span>
+          </button>
+          <button class="vfilter-btn" data-class="Product" onclick="setVesselFilter('Product')">
+            <span class="vf-dot" style="background:#a855f7"></span>Product/MR <span class="vf-badge" id="vf-prod">0</span>
+          </button>
+          <button class="vfilter-btn" data-class="incidents" onclick="setVesselFilter('incidents')">
+            <span class="vf-dot" style="background:#ef4444"></span>⚠️ Incidents <span class="vf-badge" id="vf-inc">0</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Legend (bottom-left) -->
+      <div id="legend">
+        <div class="leg-title">Tanker Classes & Cargo State</div>
+        <div class="leg-row"><div class="leg-dot" style="background:#f59e0b"></div>VLCC (&ge;300m &bull; ~2M bbls)</div>
+        <div class="leg-row"><div class="leg-dot" style="background:#00d4ff"></div>Suezmax (240&ndash;299m &bull; ~1M bbls)</div>
+        <div class="leg-row"><div class="leg-dot" style="background:#10b981"></div>Aframax / LR2 (200&ndash;239m &bull; ~700k bbls)</div>
+        <div class="leg-row"><div class="leg-dot" style="background:#a855f7"></div>Product Tanker / MR (&lt;200m)</div>
+
+        <div class="leg-title" style="margin-top:8px">Chokepoints & Security</div>
+        <div class="leg-row"><div class="leg-tri" style="border-bottom-color:#ef4444"></div>High Vulnerability Zone</div>
+        <div class="leg-row"><div class="leg-tri" style="border-bottom-color:#f59e0b"></div>Moderate Risk Zone</div>
+        <div class="leg-row"><div class="leg-dot" style="background:#ef4444; border: 1.5px solid #fff; box-shadow: 0 0 6px #ef4444;"></div>Maritime Security Alert</div>
+      </div>
+
+      <!-- News & Incidents Sidebar -->
+      <div id="sidebar">
+        <div id="sb-header">
+          <div class="sb-tab-group">
+            <button class="sb-tab-btn active" id="tab-sb-news" onclick="switchSidebarTab('news')">⚡ Intel</button>
+            <button class="sb-tab-btn" id="tab-sb-incidents" onclick="switchSidebarTab('incidents')">🚨 Incidents (<span id="sb-inc-count">0</span>)</button>
+          </div>
+          <div class="sb-header-btns">
+            <button id="btn-plot-news" class="sb-btn" onclick="toggleNewsOnMap()" title="Distribute news geographically on the map">
+              📍 Plot News
+            </button>
+            <button id="sb-toggle" class="sb-btn" onclick="toggleSidebar()" title="Collapse feed">▶</button>
+          </div>
+        </div>
+        <div id="news-list" class="sidebar-tab-content active">
+          <div class="news-empty">
+            Fetching maritime news & AI briefs…
+          </div>
+        </div>
+        <div id="incidents-list" class="sidebar-tab-content">
+          <div class="news-empty">
+            Loading active maritime security alerts…
+          </div>
+        </div>
+      </div>
+
+      <!-- Floating reopen tab for when sidebar is collapsed -->
+      <button id="sidebar-reopen-btn" class="sidebar-reopen-btn" onclick="toggleSidebar()" title="Open Intelligence Feed">
+        ⚡ Intel & Incidents ◀
+      </button>
+    </div>
+
+    <!-- VIEW 2: ANALYSIS & PRICING MODEL TAB -->
+    <div id="view-analysis" class="view-panel">
+      <div class="analysis-container">
+        
+        <!-- Top Metrics Row -->
+        <div class="analysis-header-row">
+          <div class="analysis-title-box">
+            <h2>Fundamental Oil Price Discovery Engine</h2>
+            <p class="analysis-sub">Real-Time Macro Econometric Supply-Demand & Cost Curve Valuation</p>
+          </div>
+          <div class="analysis-header-actions">
+            <div class="analysis-view-toggle">
+              <button class="analysis-toggle-btn active" id="btn-mode-cards" onclick="setAnalysisMode('cards')">
+                📋 Metric Cards
+              </button>
+              <button class="analysis-toggle-btn" id="btn-mode-charts" onclick="setAnalysisMode('charts')">
+                📈 Chart View (10Y Historical)
+              </button>
+            </div>
+            <button class="refresh-analysis-btn" onclick="loadAnalysis(true)">🔄 Recalculate Model</button>
+          </div>
+        </div>
+
+        <!-- MODE A: Live Market Cards Bar -->
+        <div class="market-bar-grid" id="market-cards-grid">
+          <div class="market-card">
+            <div class="mkt-label">Brent Crude (Spot)</div>
+            <div class="mkt-price" id="mkt-brent">--</div>
+            <div class="mkt-sub">Global Seaborne Benchmark</div>
+          </div>
+          <div class="market-card">
+            <div class="mkt-label">WTI Crude (Cushing)</div>
+            <div class="mkt-price" id="mkt-wti">--</div>
+            <div class="mkt-sub">US Inland Benchmark</div>
+          </div>
+          <div class="market-card">
+            <div class="mkt-label">Brent-WTI Seaborne Arb</div>
+            <div class="mkt-price" id="mkt-spread">--</div>
+            <div class="mkt-sub" id="mkt-spread-desc">Transatlantic Arb</div>
+          </div>
+          <div class="market-card highlight-card">
+            <div class="mkt-label">3:2:1 Refinery Crack Spread</div>
+            <div class="mkt-price" id="mkt-crack">--</div>
+            <div class="mkt-sub" id="mkt-crack-desc">Refinery Processing Margin</div>
+          </div>
+          <div class="market-card highlight-card">
+            <div class="mkt-label">Futures Term Structure</div>
+            <div class="mkt-price" id="mkt-term" style="font-size: 16px;">--</div>
+            <div class="mkt-sub" id="mkt-term-desc">M1-M2 Prompt Timespread</div>
+          </div>
+          <div class="market-card">
+            <div class="mkt-label">Natural Gas (Henry Hub)</div>
+            <div class="mkt-price" id="mkt-natgas">--</div>
+            <div class="mkt-sub">Gas-to-Oil Switching Floor</div>
+          </div>
+        </div>
+
+        <!-- MODE B: Synchronized 10-Year Historical Charts Grid -->
+        <div class="market-charts-grid" id="market-charts-grid" style="display: none;">
+          <div class="sync-chart-card">
+            <div class="sync-chart-hdr">
+              <div class="sync-chart-title">Brent Crude Spot</div>
+              <div class="sync-chart-readout" id="sync-brent">--</div>
+            </div>
+            <div class="sync-canvas-wrapper">
+              <canvas id="canvas-brent"></canvas>
+            </div>
+          </div>
+
+          <div class="sync-chart-card">
+            <div class="sync-chart-hdr">
+              <div class="sync-chart-title">WTI Crude Spot</div>
+              <div class="sync-chart-readout" id="sync-wti">--</div>
+            </div>
+            <div class="sync-canvas-wrapper">
+              <canvas id="canvas-wti"></canvas>
+            </div>
+          </div>
+
+          <div class="sync-chart-card">
+            <div class="sync-chart-hdr">
+              <div class="sync-chart-title">Brent-WTI Arb Spread</div>
+              <div class="sync-chart-readout" id="sync-spread">--</div>
+            </div>
+            <div class="sync-canvas-wrapper">
+              <canvas id="canvas-spread"></canvas>
+            </div>
+          </div>
+
+          <div class="sync-chart-card highlight-chart">
+            <div class="sync-chart-hdr">
+              <div class="sync-chart-title">3:2:1 Refinery Crack Margin</div>
+              <div class="sync-chart-readout" id="sync-crack">--</div>
+            </div>
+            <div class="sync-canvas-wrapper">
+              <canvas id="canvas-crack"></canvas>
+            </div>
+          </div>
+
+          <div class="sync-chart-card highlight-chart">
+            <div class="sync-chart-hdr">
+              <div class="sync-chart-title">Futures Term Structure (M1-M2)</div>
+              <div class="sync-chart-readout" id="sync-timespread">--</div>
+            </div>
+            <div class="sync-canvas-wrapper">
+              <canvas id="canvas-timespread"></canvas>
+            </div>
+          </div>
+
+          <div class="sync-chart-card">
+            <div class="sync-chart-hdr">
+              <div class="sync-chart-title">US Natural Gas (Henry Hub)</div>
+              <div class="sync-chart-readout" id="sync-natgas">--</div>
+            </div>
+            <div class="sync-canvas-wrapper">
+              <canvas id="canvas-natgas"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Core Model Comparison Grid -->
+        <div class="model-split-grid">
+          
+          <!-- Left Column: Theoretical Value vs Market -->
+          <div class="model-box">
+            <div class="box-title">⚖️ Fundamental Valuation Model: Where Oil Should Be</div>
+            
+            <div class="valuation-badge-container">
+              <div class="val-status-label">Valuation Status:</div>
+              <div class="val-status-badge" id="val-status-badge">Analyzing...</div>
+            </div>
+
+            <p class="val-rationale" id="val-rationale">Loading supply/demand model...</p>
+
+            <div class="fair-band-card">
+              <div class="fair-band-title">Equilibrium Fair Value Band</div>
+              <div class="fair-band-range" id="fair-band-range">$76.00 - $88.00 / bbl</div>
+              <div class="fair-band-expl">
+                Derived from OPEC+ collective fiscal revenue requirements ($80 target anchor) vs. marginal cost of swing replacement production.
+              </div>
+            </div>
+
+            <div class="cost-curve-section">
+              <div class="sec-title">Global Marginal Production Cost Anchors (USD / bbl)</div>
+              
+              <div class="cost-row">
+                <span class="cost-name">Middle East Onshore (Lifting Cost)</span>
+                <div class="cost-bar-wrapper">
+                  <div class="cost-bar" style="width: 25%; background: #22c55e;"></div>
+                </div>
+                <span class="cost-val">$25 / bbl</span>
+              </div>
+
+              <div class="cost-row">
+                <span class="cost-name">US Permian Tight Oil (Half-Cycle)</span>
+                <div class="cost-bar-wrapper">
+                  <div class="cost-bar" style="width: 52%; background: #00d4ff;"></div>
+                </div>
+                <span class="cost-val">$52 / bbl</span>
+              </div>
+
+              <div class="cost-row">
+                <span class="cost-name">Deepwater Offshore (Brazil/GoM)</span>
+                <div class="cost-bar-wrapper">
+                  <div class="cost-bar" style="width: 62%; background: #3b82f6;"></div>
+                </div>
+                <span class="cost-val">$62 / bbl</span>
+              </div>
+
+              <div class="cost-row highlight">
+                <span class="cost-name">OPEC+ Fiscal Breakeven Anchor</span>
+                <div class="cost-bar-wrapper">
+                  <div class="cost-bar" style="width: 82%; background: #f59e0b;"></div>
+                </div>
+                <span class="cost-val">$82 / bbl</span>
+              </div>
+
+              <div class="cost-row">
+                <span class="cost-name">Marginal Frontier / Oil Sands Ceiling</span>
+                <div class="cost-bar-wrapper">
+                  <div class="cost-bar" style="width: 95%; background: #ef4444;"></div>
+                </div>
+                <span class="cost-val">$95 / bbl</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: AI Macro Synthesis Memo -->
+          <div class="model-box ai-memo-box">
+            <div class="box-title">🤖 AI Chief Oil Economist: Market Diagnosis & Trajectory</div>
+            <div class="ai-memo-content" id="ai-memo-content">
+              <div class="memo-loading">Synthesizing physical freight flows, OPEC fiscal anchors, and live crude spreads...</div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /#main -->
+
+  <!-- ── Status bar ───────────────────────────────────────────── -->
+  <footer id="statusbar">
+    <span>Updated: <span class="sb-val" id="last-updated">--:--</span></span>
+    <span>AISStream (Tankers Only) · Yahoo Finance Spot API · Gemini 2.5 Macro Synthesis</span>
+    <span class="sb-right" id="footer-host">OilWatch v1.1 · Cloud Intelligence</span>
+  </footer>
+
+</div><!-- /#app -->
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
