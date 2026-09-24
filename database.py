@@ -10,8 +10,30 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SEED_DB  = os.path.join(BASE_DIR, "oilwatch.db")
 
+def is_serverless() -> bool:
+    """Detect if running in Vercel, AWS Lambda, or a read-only container."""
+    serverless_vars = [
+        "VERCEL", "VERCEL_ENV", "VERCEL_REGION", "NOW_REGION",
+        "AWS_LAMBDA_FUNCTION_NAME", "LAMBDA_TASK_ROOT", "AWS_EXECUTION_ENV",
+        "_HANDLER"
+    ]
+    for var in serverless_vars:
+        if os.environ.get(var):
+            return True
+    if os.path.exists("/var/task") or os.path.exists("/var/runtime"):
+        return True
+    try:
+        test_file = os.path.join(BASE_DIR, ".write_check")
+        with open(test_file, "w") as f:
+            f.write("ok")
+        if os.path.exists(test_file):
+            os.remove(test_file)
+        return False
+    except Exception:
+        return True
+
 # On Vercel / AWS Lambda / Serverless platforms, only temp dir is writable
-if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+if is_serverless():
     tmp_dir = tempfile.gettempdir()
     os.makedirs(tmp_dir, exist_ok=True)
     DB_PATH = os.path.join(tmp_dir, "oilwatch.db")
@@ -33,9 +55,10 @@ def get_conn() -> sqlite3.Connection:
 
 def init_db():
     """Create all tables if they don't exist."""
-    logger.info("Initializing database...")
-    with get_conn() as conn:
-        conn.executescript("""
+    logger.info(f"Initializing database at {DB_PATH}...")
+    try:
+        with get_conn() as conn:
+            conn.executescript("""
             CREATE TABLE IF NOT EXISTS vessels (
                 mmsi        TEXT PRIMARY KEY,
                 name        TEXT DEFAULT '',
@@ -97,8 +120,10 @@ def init_db():
             try:
                 conn.execute(col_sql)
             except sqlite3.OperationalError:
-                pass  # already exists
-    logger.info("Database ready.")
+                pass
+        logger.info("Database ready.")
+    except Exception as e:
+        logger.error(f"init_db encountered error: {e}", exc_info=True)
 
 
 def get_current_vessels(limit: int = 800):

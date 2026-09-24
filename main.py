@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from database import init_db, get_current_vessels, get_news, get_oil_prices, get_incidents
+from database import init_db, is_serverless, get_current_vessels, get_news, get_oil_prices, get_incidents
 from collectors.ais_collector import run_ais_stream
 from scheduler import start_scheduler, stop_scheduler
 
@@ -105,21 +105,26 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 50)
 
     init_db()
-    from collectors.hormuz_fleet import init_hormuz_fleet, run_hormuz_fleet_loop
 
-    # Seed Hormuz corridor fleet immediately so map has tankers from second 1
-    init_hormuz_fleet()
-    await _download_shipping_lanes()
-
-    is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    serverless = is_serverless()
     ais_task = None
     hormuz_task = None
 
-    if not is_serverless:
-        start_scheduler()
-        ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
-        hormuz_task = asyncio.create_task(run_hormuz_fleet_loop(manager.broadcast))
-        logger.info("✓ OilWatch background daemons and schedulers active.")
+    try:
+        from collectors.hormuz_fleet import init_hormuz_fleet, run_hormuz_fleet_loop
+        init_hormuz_fleet()
+    except Exception as e:
+        logger.warning(f"init_hormuz_fleet skipped: {e}")
+
+    if not serverless:
+        await _download_shipping_lanes()
+        try:
+            start_scheduler()
+            ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
+            hormuz_task = asyncio.create_task(run_hormuz_fleet_loop(manager.broadcast))
+            logger.info("✓ OilWatch background daemons and schedulers active.")
+        except Exception as e:
+            logger.warning(f"Could not start background daemons: {e}")
     else:
         logger.info("✓ OilWatch running in serverless mode (Vercel/Lambda).")
 
@@ -133,8 +138,11 @@ async def lifespan(app: FastAPI):
         ais_task.cancel()
     if hormuz_task:
         hormuz_task.cancel()
-    if not is_serverless:
-        stop_scheduler()
+    if not serverless:
+        try:
+            stop_scheduler()
+        except Exception:
+            pass
     logger.info("OilWatch stopped.")
 
 
