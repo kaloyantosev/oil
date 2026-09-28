@@ -163,14 +163,38 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.middleware("http")
+async def restore_vercel_path(request, call_next):
+    # 1. Check if Vercel passed target path via query parameter ?__path__=...
+    qp = request.query_params.get("__path__")
+    if qp:
+        clean = qp.lstrip("/")
+        if clean.startswith("api/"):
+            request.scope["path"] = f"/{clean}"
+        else:
+            request.scope["path"] = f"/api/{clean}"
+    elif request.scope.get("path") in ("/api/index.py", "/api/index", "/api"):
+        # 2. Check headers for original requested path
+        for h in ("x-matched-path", "x-forwarded-uri", "x-invoke-path", "x-original-uri"):
+            val = request.headers.get(h)
+            if val and val not in ("/api/index.py", "/api/index", "/api", "/"):
+                request.scope["path"] = val.split("?")[0]
+                break
+
+    return await call_next(request)
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 @app.get("/", include_in_schema=False)
-@app.get("/api", include_in_schema=False)
-@app.get("/api/", include_in_schema=False)
-@app.get("/api/index.py", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/api/index.py", include_in_schema=False)
+@app.get("/api", include_in_schema=False)
+async def api_root_status():
+    return {"status": "ok", "service": "OilWatch API", "version": "1.0.0"}
 
 
 @app.get("/health")
