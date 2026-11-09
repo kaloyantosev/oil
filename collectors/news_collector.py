@@ -1,168 +1,116 @@
 """
-News Collector
-Fetches oil and maritime news from multiple RSS feeds.
-Uses Gemini AI to generate a 2-sentence "what to expect" brief for each article.
+News collector: oil & shipping RSS feeds, keyword relevance filter, keyword tone tag,
+and (optionally) a two-sentence Gemini brief for the newest articles.
 """
 import logging
 import re
-import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Optional
 
 import feedparser
 import requests
 
+from collectors.llm import generate
 from config import settings
+from database import get_conn
 
 logger = logging.getLogger(__name__)
 
-OIL_KEYWORDS = [kw.lower() for kw in settings.OIL_KEYWORDS]
 
-# Simple HTML tag stripper
+def _word_regex(words: list[str], prefix: bool = False) -> re.Pattern:
+    """Whole-word match (or word-prefix match for stems like 'pirac')."""
+    alts = "|".join(re.escape(w.lower()) for w in sorted(words, key=len, reverse=True))
+    return re.compile(rf"\b(?:{alts})" + ("" if prefix else r"\b"), re.IGNORECASE)
+
+
+_RELEVANT = _word_regex(settings.OIL_KEYWORDS)
 _TAG_RE = re.compile(r"<[^>]+>")
+
+# Tone from an oil-price perspective. Stems match word prefixes ("escalat" -> escalation).
+_UP = _word_regex([
+    "attack", "missile", "drone", "houthi", "pirac", "hijack", "disrupt", "blockade", "outage",
+    "sanction", "seiz", "escalat", "explosion", "force majeure", "shut-in", "production cut",
+    "output cut", "supply cut", "inventory draw", "stock draw", "deficit", "curtail",
+], prefix=True)
+_DOWN = _word_regex([
+    "glut", "oversuppl", "surplus", "inventory build", "stock build", "weak demand", "recession",
+    "slowdown", "output hike", "production increase", "quota increase", "ceasefire", "peace deal",
+    "sanctions relief", "price war", "demand destruction",
+], prefix=True)
 
 
 def _strip_html(text: str) -> str:
-    return _TAG_RE.sub("", text or "").strip()
+    return re.sub(r"\s+", " ", _TAG_RE.sub(" ", text or "")).strip()
 
 
-def _is_relevant(title: str, body: str = "") -> bool:
-    combined = (title + " " + body).lower()
-    return any(kw in combined for kw in OIL_KEYWORDS)
+def classify_tone(text: str) -> str:
+    up, down = len(_UP.findall(text)), len(_DOWN.findall(text))
+    return "bullish" if up > down else "bearish" if down > up else "neutral"
 
 
-def _get_ai_brief(title: str, content: str) -> Optional[str]:
-    """Call Gemini 1.5 Flash to generate a 'what to expect' brief."""
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your_gemini_key_here":
-        return None
-
+def _fetch_feed(cfg: dict) -> list[dict]:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-3.6-flash")
-
-        prompt = (
-            "You are an oil market intelligence analyst.\n\n"
-            f"News headline: {title}\n"
-            f"Details: {content[:800]}\n\n"
-            "Write EXACTLY 2 sentences:\n"
-            "1. What happened (factual, specific).\n"
-            "2. What oil market participants should expect as a consequence "
-            "(prices, routes, supply/demand impact).\n\n"
-            "If the article is completely unrelated to oil, energy, or shipping, "
-            "respond only with: NOT_RELEVANT"
-        )
-
-        response = model.generate_content(prompt)
-        brief = response.text.strip()
-
-        if "NOT_RELEVANT" in brief:
-            return None
-        return brief
-
+        r = requests.get(cfg["url"], headers={"User-Agent": settings.USER_AGENT}, timeout=15)
+        r.raise_for_status()
     except Exception as e:
-        logger.warning(f"Gemini error: {e}")
-        return None
-
-
-# ── Sentiment Keywords (Aligned strictly: Bullish = Oil Price Rising, Bearish = Oil Price Falling)
-BULLISH_KEYWORDS = [
-    "attack", "missile", "drone", "houthi", "pirac", "disrupt", "strait", "hormuz",
-    "cut", "surge", "spike", "outage", "strike", "blockade", "sanction", "closure",
-    "seiz", "tension", "curtail", "tight", "escalat", "war", "conflict", "explosion",
-    "draw", "deficit", "pipeline halt", "force majeure", "shut-in", "output reduction"
-]
-
-BEARISH_KEYWORDS = [
-    "drop", "plunge", "fall", "slump", "inventory build", "glut", "recession",
-    "weak demand", "oversupply", "cheating", "surplus", "slowdown", "weakness",
-    "stockpile increase", "output hike", "quota increase", "ceasefire", "peace deal", "sanction relief"
-]
-
-
-def _classify_sentiment(title: str, summary: str = "") -> str:
-    """
-    Classifies market sentiment from an oil price perspective:
-    - 'bullish': indicates upward pressure on crude oil prices (supply curbs, geopolitical risk, inventory draw).
-    - 'bearish': indicates downward pressure on crude oil prices (demand destruction, surplus, supply hikes).
-    - 'neutral': balanced or routine operational news.
-    """
-    combined = (title + " " + (summary or "")).lower()
-    bull_count = sum(1 for kw in BULLISH_KEYWORDS if kw in combined)
-    bear_count = sum(1 for kw in BEARISH_KEYWORDS if kw in combined)
-    if bull_count > bear_count and bull_count > 0:
-        return "bullish"
-    elif bear_count > bull_count and bear_count > 0:
-        return "bearish"
-    return "neutral"
-
-
-def fetch_news():
-    """Pull all RSS feeds, filter for oil relevance, store with AI briefs."""
-    logger.info("Fetching news feeds...")
-    new_count = 0
-
-    for feed_cfg in settings.RSS_FEEDS:
-        try:
-            # feedparser handles encoding/redirects automatically
-            parsed = feedparser.parse(feed_cfg["url"])
-            entries = parsed.entries[:15]
-
-            for entry in entries:
-                title   = (entry.get("title", "") or "").strip()
-                link    = (entry.get("link",  "") or "").strip()
-                summary = _strip_html(
-                    entry.get("summary", "") or entry.get("description", "") or ""
-                )[:1200]
-
-                if not title or not link:
-                    continue
-
-                if not _is_relevant(title, summary):
-                    continue
-
-                # Parse publication date
+        logger.warning(f"RSS {cfg['name']}: {e}")
+        return []
+    items = []
+    for entry in feedparser.parse(r.content).entries[:20]:
+        title = (entry.get("title") or "").strip()
+        link = (entry.get("link") or "").strip()
+        summary = _strip_html(entry.get("summary") or entry.get("description") or "")[:1200]
+        if not title or not link or not _RELEVANT.search(f"{title} {summary}"):
+            continue
+        published = None
+        raw_date = entry.get("published") or entry.get("updated")
+        if raw_date:
+            try:
+                published = parsedate_to_datetime(raw_date).astimezone(timezone.utc).isoformat()
+            except Exception:
                 published = None
-                raw_date = entry.get("published") or entry.get("updated")
-                if raw_date:
-                    try:
-                        published = parsedate_to_datetime(raw_date).isoformat()
-                    except Exception:
-                        published = datetime.now(timezone.utc).isoformat()
+        items.append({"title": title, "link": link, "source": cfg["name"], "published": published, "summary": summary})
+    return items
 
-                # Skip duplicates
-                from database import DB_PATH
-                with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-                    if conn.execute(
-                        "SELECT id FROM news WHERE link=?", (link,)
-                    ).fetchone():
-                        continue
 
-                # Generate AI brief and sentiment
-                ai_brief = _get_ai_brief(title, summary)
-                sentiment = _classify_sentiment(title, summary)
+def _ai_brief(title: str, summary: str):
+    text = generate(
+        "You are an oil market analyst. In exactly 2 sentences: (1) what happened, factually; "
+        "(2) the plausible consequence for oil supply, shipping routes or prices. Do not invent facts "
+        "beyond the text. If it is unrelated to oil, energy or shipping, reply only NOT_RELEVANT.\n\n"
+        f"Headline: {title}\nDetails: {summary[:800]}"
+    )
+    return None if not text or "NOT_RELEVANT" in text else text
 
-                # Store in DB
-                with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO news
-                            (title, link, source, published, summary, ai_brief, sentiment)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        title,
-                        link,
-                        feed_cfg["name"],
-                        published,
-                        summary[:600],
-                        ai_brief,
-                        sentiment,
-                    ))
-                    conn.commit()
 
-                new_count += 1
+def fetch_news(with_ai: bool = True) -> int:
+    """Fetch all feeds in parallel, store new relevant articles. Returns number of new articles."""
+    with ThreadPoolExecutor(max_workers=len(settings.RSS_FEEDS)) as pool:
+        items = [it for feed in pool.map(_fetch_feed, settings.RSS_FEEDS) for it in feed]
 
-        except Exception as e:
-            logger.error(f"RSS error [{feed_cfg['name']}]: {e}")
+    with get_conn() as conn:
+        known = {r[0] for r in conn.execute("SELECT link FROM news")}
+    fresh = [it for it in items if it["link"] not in known]
+    fresh.sort(key=lambda it: it["published"] or "", reverse=True)
 
-    logger.info(f"News: {new_count} new articles saved.")
+    ai_budget = settings.MAX_AI_BRIEFS_PER_RUN if with_ai else 0
+    for it in fresh:
+        it["tone"] = classify_tone(f"{it['title']} {it['summary']}")
+        it["ai_brief"] = None
+        if ai_budget > 0:
+            it["ai_brief"] = _ai_brief(it["title"], it["summary"])
+            ai_budget -= 1
+
+    with get_conn() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO news (title, link, source, published, summary, ai_brief, sentiment) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [(it["title"], it["link"], it["source"], it["published"], it["summary"][:600], it["ai_brief"], it["tone"])
+             for it in fresh],
+        )
+    logger.info(f"News: {len(fresh)} new of {len(items)} relevant items.")
+
+    from collectors.alerts_collector import extract_alerts_from_news
+    extract_alerts_from_news()
+    return len(fresh)

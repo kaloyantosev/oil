@@ -1156,3 +1156,17 @@ html, body {
   overflow: hidden;
 }
 
+
+/* ── Market structure additions ─────────────────────────────── */
+.facts-list { margin: 4px 0 14px; padding-left: 18px; line-height: 1.55; font-size: 13px; color: var(--text); }
+.facts-list li { margin: 4px 0; }
+.box-note { font-size: 11px; font-weight: 400; color: var(--text-dim); margin-left: 4px; }
+.cost-bar-wrapper { position: relative; }
+.brent-marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.8); }
+.ref-legend { font-size: 11px; color: var(--text-dim); margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+.brent-marker-key { display: inline-block; width: 2px; height: 12px; background: #fff; }
+.inc-note { font-size: 11px; color: var(--text-dim); padding: 8px 10px; border-bottom: 1px solid var(--border); line-height: 1.45; }
+.inc-note a, .inc-card-meta a, .news-empty a { color: var(--accent); }
+.cost-bar-wrapper { overflow: visible; }
+.cost-row { margin-bottom: 8px; }
+.cost-row .cost-name { white-space: normal; line-height: 1.3; }

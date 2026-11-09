@@ -17,10 +17,10 @@ if not exist ".env" (
         copy ".env.template" ".env" >nul
         echo  [!] .env file created from template.
         echo.
-        echo  *** IMPORTANT: Open .env in a text editor and add your
-        echo  *** three free API keys before continuing.
+        echo  Open .env and add any of these free, optional API keys.
+        echo  Without keys, market data and news still work.
         echo.
-        echo  Keys needed ^(all free, no credit card^):
+        echo  Keys ^(all free, no credit card^):
         echo    1. AISStream.io  → https://aisstream.io  ^(sign in with GitHub^)
         echo    2. EIA           → https://www.eia.gov/opendata/
         echo    3. Gemini AI     → https://aistudio.google.com/apikey

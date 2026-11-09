@@ -1,55 +1,58 @@
-# OilWatch — Global Oil Shipping Intelligence
+# OilWatch: oil shipping & market structure
 
-A locally-hosted real-time oil shipping dashboard running entirely on your laptop.
+A self-hosted dashboard with two views:
 
-## What it does
-- **Live tanker positions** on a global map via AISStream.io (free WebSocket API)
-- **Oil prices** — Brent Crude & WTI from the EIA free API, updated every 6 hours
-- **Maritime news** from 6 RSS feeds (gCaptain, Splash247, Reuters, etc.), filtered for oil/shipping relevance, with AI-written "what to expect" briefs via Gemini
-- **UKMTO incident advisories** scraped every hour and geo-plotted on the map
-- **Global shipping lanes** overlay (CC-licensed GeoJSON from GitHub)
-- **7 major chokepoints** (Hormuz, Bab el-Mandeb, Suez, Malacca, Bosphorus, Panama, Cape of Good Hope) with risk levels and volume data
+- **Live fleet:** tanker positions from AIS (AISStream.io), chokepoints, shipping lanes, oil & shipping news, and security alerts derived from that news.
+- **Market structure:** Brent, WTI, Henry Hub, the Brent–WTI spread, the 3:2:1 crack spread and the WTI M1–M2 calendar spread. Each is ranked against its own last 5 years (percentile and z-score), with 10 years of monthly charts.
 
-## Quick Start
+Everything shown is real data or clearly labelled as an estimate. When a source is unavailable the value shows as `--` rather than a placeholder.
 
-### 1. Get your 3 free API keys (5 minutes total)
+## Quick start (Windows)
 
-| Key | Where | Time |
-|---|---|---|
-| AISStream.io | https://aisstream.io — sign in with GitHub | 1 min |
-| EIA Open Data | https://www.eia.gov/opendata/ — register | 2 min |
-| Google Gemini | https://aistudio.google.com/apikey | 1 min |
+1. Double-click **`start.bat`**. On first run it creates `.env` from `.env.template` and opens it.
+2. Add the keys you want. All are free and optional:
 
-### 2. Add keys to `.env`
-Open the `.env` file in the project folder and fill in your 3 keys.
+   | Key | Enables | Where |
+   |---|---|---|
+   | `AISSTREAM_API_KEY` | Live tanker positions | https://aisstream.io |
+   | `GEMINI_API_KEY` | AI news briefs and market commentary | https://aistudio.google.com/apikey |
+   | `EIA_API_KEY` | EIA daily spot prices (`/api/oil-prices`) | https://www.eia.gov/opendata/ |
 
-### 3. Launch
-Double-click **`start.bat`**
+3. Run `start.bat` again and open **http://localhost:8000**.
 
-### 4. Open browser
-Go to **http://localhost:8000**
+Other platforms: `pip install -r requirements.txt` then `python main.py`.
 
----
-
-## Architecture
+## How it works
 
 ```
-start.bat
-  └── Python FastAPI (port 8000)
-        ├── WebSocket → AISStream.io    [live tanker positions]
-        ├── APScheduler
-        │     ├── every 30 min → RSS news + Gemini AI briefs
-        │     ├── every 6 hrs  → EIA oil prices
-        │     └── every 1 hr   → UKMTO incidents
-        ├── SQLite (oilwatch.db)        [local data cache]
-        └── Leaflet.js frontend         [http://localhost:8000]
+main.py (FastAPI)
+ ├── AIS stream (AISStream.io WebSocket) → tankers only (AIS types 80–89, ≥115 m)
+ │     buffered in memory, flushed to SQLite + browsers once per second
+ ├── Scheduler: news + derived alerts every 30 min, EIA prices every 6 h
+ ├── analysis_engine.py: futures quotes (5 min cache), 10y daily history (6 h cache)
+ └── public/  → the dashboard (Leaflet + Chart.js)
 ```
 
-## Limitations (inherent to free data)
-- **AIS coverage gaps in open ocean**: Free AIS uses land-based receivers. Tankers in the middle of the Atlantic/Indian Ocean won't appear. Last-known position is shown with a timestamp.
-- **AIS destination is self-reported**: Captains type it manually — it can be blank, wrong, or "FOR ORDERS".
-- **Cargo not visible**: AIS doesn't tell you whether a tanker is laden or in ballast (empty).
-- **UKMTO scraping**: If UKMTO changes their website structure, the scraper may stop finding incidents until updated.
+### Market data notes
 
-## Stopping the server
-Press `Ctrl+C` in the terminal window, or just close it.
+- Prices are **front-month futures** from Yahoo Finance (ICE Brent, NYMEX WTI/RBOB/ULSD/Henry Hub), not physical spot assessments.
+- **Calendar spread** compares the two nearest WTI contracts. They are chosen from the CME expiry rule (last trade 3 business days before the 25th of the prior month), never hard-coded. Positive means backwardation.
+- **3:2:1 crack** = (2 × RBOB + 1 × ULSD, $/gal × 42 − 3 × WTI) / 3, in $ per barrel of crude.
+- Historical charts are continuous front-month series, so roll dates can create small jumps.
+- **Reference levels** (Middle East cost, US shale breakeven, Saudi fiscal breakeven) are approximate public estimates for context. They are not a fair-value model.
+
+### Vessel notes
+
+- The free AIS feed relies on land-based receivers, so open-ocean coverage is patchy. Vessels not heard from in 48 h are hidden (`VESSEL_MAX_AGE_HOURS`).
+- Size class comes from AIS length. Laden/ballast is **estimated** from draught, which the crew enters by hand and often doesn't update.
+
+### Security alerts
+
+UKMTO's incident page loads its data with JavaScript and has no public feed, so it isn't scraped. Alerts come from news articles that describe a security event in a named sea area. They are plotted at that area's reference point (not the exact position) and link to the source article. For official advisories, see https://www.ukmto.org/recent-incidents.
+
+## Deployment
+
+- **Persistent host** (Render, Railway, Fly, a VM): `Procfile` runs uvicorn. Everything works, including live AIS.
+- **Vercel**: serves `public/` statically and the API from `api/index.py`. Serverless functions can't hold the AIS WebSocket or run the scheduler, so there are no live vessels. Market data works, and news refreshes on request at most every 30 min (without AI briefs).
+
+Not investment advice.

@@ -1,55 +1,54 @@
 """
-OilWatch — Main FastAPI Application
-Serves the frontend, REST API, WebSocket stream, and coordinates all collectors.
+OilWatch: FastAPI app serving the dashboard, the REST API and the live vessel WebSocket.
+
+Persistent host (local, Render, Railway, Fly): AIS stream + scheduled collectors run in-process.
+Serverless (Vercel): no background work; news is refreshed lazily on request and vessels are
+only available if a persistent instance shares the database.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiofiles
-import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from collectors.ais_collector import classify_vessel, run_ais_stream
 from config import settings
-from database import init_db, is_serverless, get_current_vessels, get_news, get_oil_prices, get_incidents
-from collectors.ais_collector import run_ais_stream
-from scheduler import start_scheduler, stop_scheduler
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
+from database import (
+    get_current_vessels, get_incidents, get_news, get_oil_prices, init_db, is_serverless,
 )
-logger = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("oilwatch")
+
+PUBLIC_DIR = Path(__file__).resolve().parent / "public"
+SERVERLESS = is_serverless()
 
 
-# ─── WebSocket Connection Manager ────────────────────────────────────────────
 class ConnectionManager:
     def __init__(self):
-        self._connections: list[WebSocket] = []
+        self._connections: set[WebSocket] = set()
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self._connections.append(ws)
-        logger.info(f"Frontend connected ({len(self._connections)} clients)")
+        self._connections.add(ws)
 
     def disconnect(self, ws: WebSocket):
-        self._connections.remove(ws)
-        logger.info(f"Frontend disconnected ({len(self._connections)} clients)")
+        self._connections.discard(ws)
 
     async def broadcast(self, payload: dict):
-        dead = []
-        for ws in self._connections:
-            try:
-                await ws.send_json(payload)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self._connections.remove(ws)
+        targets = list(self._connections)
+        if not targets:
+            return
+        results = await asyncio.gather(*(ws.send_json(payload) for ws in targets), return_exceptions=True)
+        for ws, res in zip(targets, results):
+            if isinstance(res, Exception):
+                self._connections.discard(ws)
 
     @property
     def count(self):
@@ -59,142 +58,66 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-BASE_DIR   = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-
-
-# ─── Startup / Shutdown ───────────────────────────────────────────────────────
-async def _download_shipping_lanes():
-    """Download the shipping lanes GeoJSON from GitHub if not cached locally."""
-    path = STATIC_DIR / "data" / "shipping_lanes.geojson"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.stat().st_size > 10_000:
-            logger.info("Shipping lanes already cached.")
-            return
-
-        url = (
-            "https://raw.githubusercontent.com/newzealandpaul/"
-            "Shipping-Lanes/main/data/Shipping_Lanes_v1.geojson"
-        )
-        logger.info("Downloading shipping lanes GeoJSON...")
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                async with aiofiles.open(path, "wb") as f:
-                    await f.write(r.content)
-                logger.info(f"✓ Shipping lanes downloaded ({len(r.content) / 1024:.0f} KB)")
-            else:
-                _write_empty_geojson(path)
-    except Exception as e:
-        logger.warning(f"Shipping lanes download skipped or filesystem read-only: {e}")
-
-
-def _write_empty_geojson(path: Path):
-    try:
-        path.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
-    except Exception:
-        pass
+def _vessels_payload() -> dict:
+    vessels = get_current_vessels(max_age_hours=settings.VESSEL_MAX_AGE_HOURS)
+    enriched = [{**v, **classify_vessel(v.get("length"), v.get("draught"), v.get("sog"))} for v in vessels]
+    latest = max((v.get("updated_at") or "" for v in vessels), default="")
+    return {"vessels": enriched, "count": len(enriched), "latest_updated_at": latest}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Startup ──────────────────────────────────────────────────────────────
-    logger.info("=" * 50)
-    logger.info(" OilWatch — Global Oil Shipping Intelligence")
-    logger.info("=" * 50)
-
     init_db()
-
-    serverless = is_serverless()
     ais_task = None
-    hormuz_task = None
-
-    try:
-        from collectors.hormuz_fleet import init_hormuz_fleet, run_hormuz_fleet_loop
-        init_hormuz_fleet()
-    except Exception as e:
-        logger.warning(f"init_hormuz_fleet skipped: {e}")
-
-    if not serverless:
-        await _download_shipping_lanes()
-        try:
-            start_scheduler()
-            ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
-            hormuz_task = asyncio.create_task(run_hormuz_fleet_loop(manager.broadcast))
-            logger.info("✓ OilWatch background daemons and schedulers active.")
-        except Exception as e:
-            logger.warning(f"Could not start background daemons: {e}")
+    if not SERVERLESS:
+        from scheduler import start_scheduler, stop_scheduler
+        start_scheduler()
+        ais_task = asyncio.create_task(run_ais_stream(manager.broadcast))
+        logger.info("OilWatch running: AIS stream and scheduled collectors active.")
     else:
-        logger.info("✓ OilWatch running in serverless mode (Vercel/Lambda).")
-
-    logger.info("✓ OilWatch server initialized successfully.")
-    logger.info("-" * 50)
-
-    yield  # Server is running
-
-    # ── Shutdown ─────────────────────────────────────────────────────────────
+        logger.info("OilWatch running in serverless mode: data refreshes lazily on request.")
+    yield
     if ais_task:
         ais_task.cancel()
-    if hormuz_task:
-        hormuz_task.cancel()
-    if not serverless:
-        try:
-            stop_scheduler()
-        except Exception:
-            pass
-    logger.info("OilWatch stopped.")
+    if not SERVERLESS:
+        stop_scheduler()
 
 
-# ─── App ──────────────────────────────────────────────────────────────────────
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(title="OilWatch", version="1.0.0", lifespan=lifespan)
-
-# Enable CORS for online cloud hosting and reverse proxies
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app = FastAPI(title="OilWatch", version="1.1.0", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.mount("/static", StaticFiles(directory=str(PUBLIC_DIR / "static")), name="static")
 
 
 @app.middleware("http")
 async def restore_vercel_path(request, call_next):
-    # 1. Check if Vercel passed target path via query parameter ?__path__=...
+    """vercel.json rewrites /api/* to /api/index.py?__path__=*; restore the original path."""
     qp = request.query_params.get("__path__")
-    if qp:
+    if qp is not None:
         clean = qp.lstrip("/")
-        if clean.startswith("api/"):
-            request.scope["path"] = f"/{clean}"
-        else:
-            request.scope["path"] = f"/api/{clean}"
-    elif request.scope.get("path") in ("/api/index.py", "/api/index", "/api"):
-        # 2. Check headers for original requested path
-        for h in ("x-matched-path", "x-forwarded-uri", "x-invoke-path", "x-original-uri"):
-            val = request.headers.get(h)
-            if val and val not in ("/api/index.py", "/api/index", "/api", "/"):
-                request.scope["path"] = val.split("?")[0]
-                break
-
+        request.scope["path"] = f"/{clean}" if clean.startswith("api/") or clean == "health" else f"/api/{clean}"
     return await call_next(request)
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# Lazy refresh for serverless, where no scheduler runs.
+_last_refresh: dict[str, float] = {}
+
+
+async def _ensure_fresh_news():
+    if not SERVERLESS:
+        return
+    if time.time() - _last_refresh.get("news", 0) < settings.SERVERLESS_REFRESH_MINUTES * 60:
+        return
+    _last_refresh["news"] = time.time()
+    from collectors.news_collector import fetch_news
+    try:
+        await asyncio.to_thread(fetch_news, False)  # no AI briefs: keep requests fast
+    except Exception as e:
+        logger.warning(f"Lazy news refresh failed: {e}")
+
+
 @app.get("/", include_in_schema=False)
-@app.get("/index.html", include_in_schema=False)
 async def root():
-    return FileResponse(str(STATIC_DIR / "index.html"))
-
-
-@app.get("/api/index.py", include_in_schema=False)
-@app.get("/api", include_in_schema=False)
-async def api_root_status():
-    return {"status": "ok", "service": "OilWatch API", "version": "1.0.0"}
+    return FileResponse(PUBLIC_DIR / "index.html")
 
 
 @app.get("/health")
@@ -202,119 +125,68 @@ async def api_root_status():
 async def health():
     return {
         "status": "ok",
-        "version": "1.0.0",
+        "version": app.version,
+        "mode": "serverless" if SERVERLESS else "persistent",
         "ws_clients": manager.count,
-        "ais_key_set": bool(settings.AISSTREAM_API_KEY and settings.AISSTREAM_API_KEY != "your_aisstream_key_here"),
-        "eia_key_set": bool(settings.EIA_API_KEY and settings.EIA_API_KEY != "your_eia_key_here"),
-        "gemini_key_set": bool(settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your_gemini_key_here"),
+        "ais_enabled": bool(settings.AISSTREAM_API_KEY) and not SERVERLESS,
+        "eia_enabled": bool(settings.EIA_API_KEY),
+        "ai_enabled": bool(settings.GEMINI_API_KEY),
     }
 
 
 @app.get("/api/vessels")
-@app.get("/vessels")
 async def api_vessels():
-    from collectors.ais_collector import classify_vessel
-    from database import get_latest_vessel_timestamp
-    vessels = await asyncio.to_thread(get_current_vessels)
-    latest_ts = await asyncio.to_thread(get_latest_vessel_timestamp)
-    enriched = []
-    for v in vessels:
-        c = classify_vessel(v.get("length", 0), v.get("draught", 0), v.get("sog", 0))
-        enriched.append({**v, **c})
-    return {"vessels": enriched, "count": len(enriched), "latest_updated_at": latest_ts}
+    return await asyncio.to_thread(_vessels_payload)
 
 
 @app.get("/api/news")
-@app.get("/news")
 async def api_news(limit: int = 25):
-    news = await asyncio.to_thread(get_news, limit)
+    await _ensure_fresh_news()
+    news = await asyncio.to_thread(get_news, min(max(limit, 1), 100))
     return {"news": news, "count": len(news)}
 
 
-@app.get("/api/oil-prices")
-@app.get("/oil-prices")
-async def api_oil_prices():
-    prices = await asyncio.to_thread(get_oil_prices)
-    return {"prices": prices}
-
-
 @app.get("/api/incidents")
-@app.get("/incidents")
 async def api_incidents():
-    incidents = await asyncio.to_thread(get_incidents)
-    return {"incidents": incidents}
+    await _ensure_fresh_news()
+    return {"incidents": await asyncio.to_thread(get_incidents)}
+
+
+@app.get("/api/oil-prices")
+async def api_oil_prices():
+    return {"prices": await asyncio.to_thread(get_oil_prices)}
 
 
 @app.get("/api/analysis")
-@app.get("/analysis")
 async def api_analysis():
-    from analysis_engine import fetch_live_commodities, calculate_fair_value_model, get_ai_macro_analysis, GLOBAL_COST_TRUCTURE
-    # 1. Fetch live commodity market quotes (Brent, WTI, NatGas, Crack Spread, Term Structure)
-    quotes = await asyncio.to_thread(fetch_live_commodities)
-    brent = quotes.get("brent") or 82.50
-    wti = quotes.get("wti") or 78.20
-    natgas = quotes.get("natgas")
-
-    # 2. Compute theoretical fair value & cost curve mechanics
-    fair_value = calculate_fair_value_model(brent, wti)
-
-    # 3. Pull recent intelligence
+    from analysis_engine import get_analysis
     news = await asyncio.to_thread(get_news, 10)
-
-    # 4. Generate AI Macro memo (with crack spread and curve context)
-    ai_memo = await asyncio.to_thread(get_ai_macro_analysis, fair_value, news, quotes)
-
-    return {
-        "quotes": quotes,
-        "fair_value": fair_value,
-        "cost_curve": GLOBAL_COST_TRUCTURE,
-        "ai_memo": ai_memo,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    return await asyncio.to_thread(get_analysis, news)
 
 
 @app.get("/api/historical-data")
-@app.get("/historical-data")
 async def api_historical_data():
-    from analysis_engine import get_10y_historical_data
-    data = await asyncio.to_thread(get_10y_historical_data)
-    return data
+    from analysis_engine import get_historical_data
+    return await asyncio.to_thread(get_historical_data)
 
 
-# ─── WebSocket ────────────────────────────────────────────────────────────────
 @app.websocket("/ws/vessels")
 async def ws_vessels(websocket: WebSocket):
-    from collectors.ais_collector import classify_vessel
     await manager.connect(websocket)
-
-    # Send all current vessels immediately on connect with full classification
-    from database import get_latest_vessel_timestamp
-    vessels = await asyncio.to_thread(get_current_vessels)
-    enriched = []
-    for v in vessels:
-        c = classify_vessel(v.get("length", 0), v.get("draught", 0), v.get("sog", 0))
-        enriched.append({**v, **c})
-    latest_ts = await asyncio.to_thread(get_latest_vessel_timestamp)
-    await websocket.send_json({"type": "initial_load", "data": enriched, "latest_updated_at": latest_ts})
-
     try:
+        payload = await asyncio.to_thread(_vessels_payload)
+        await websocket.send_json({"type": "initial_load", "data": payload["vessels"],
+                                   "latest_updated_at": payload["latest_updated_at"]})
         while True:
-            # Keep connection alive; frontend can send ping messages
-            await websocket.receive_text()
+            await websocket.receive_text()  # client pings keep the connection open
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(websocket)
 
 
-# ─── Entry Point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import os
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting OilWatch on port {port}...")
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        access_log=False,
-    )
+    logger.info(f"Open http://localhost:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", access_log=False)

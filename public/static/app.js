@@ -6,12 +6,18 @@
 
 'use strict';
 
+// Escape untrusted text (RSS titles, AIS names/destinations) before inserting as HTML.
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const safeUrl = (u) => (/^https?:\/\//i.test(u || '') ? esc(u) : '#');
+const fmtNum = (v, d = 2) => (v == null || isNaN(v) ? '--' : Number(v).toFixed(d));
+const fmtSigned = (v, d = 2) => (v == null || isNaN(v) ? '--' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d)}`);
+const ordinal = (n) => `${n}${(n % 100 >= 11 && n % 100 <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th')}`;
+
 // ── Config ───────────────────────────────────────────────────────────────────
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_URL     = `${wsProtocol}//${location.host}/ws/vessels`;
 const API        = '/api';
 const NEWS_MS    = 5  * 60 * 1000;   // refresh news every 5 min
-const PRICE_MS   = 15 * 60 * 1000;   // refresh prices every 15 min
 const INC_MS     = 10 * 60 * 1000;   // refresh incidents every 10 min
 const PING_MS    = 25 * 1000;        // WebSocket keep-alive ping
 
@@ -249,17 +255,24 @@ function upsertVessel(v) {
   const vClass = merged.vessel_class || (merged.length >= 300 ? 'VLCC' : merged.length >= 240 ? 'Suezmax' : merged.length >= 200 ? 'Aframax' : 'Product');
   const color = merged.color || (vClass === 'VLCC' ? '#f59e0b' : vClass === 'Suezmax' ? '#00d4ff' : vClass === 'Aframax' ? '#10b981' : '#a855f7');
   const heading = merged.heading ?? merged.cog ?? 0;
-  const icon = shipIcon(color, heading, vClass);
-  const popup = buildVesselPopup(merged, vClass, color);
+  const iconKey = `${color}|${vClass}|${Math.round(heading / 10) * 10}`;
 
   if (vesselMarkers.has(mmsi)) {
     const m = vesselMarkers.get(mmsi);
     m.setLatLng([merged.lat, merged.lon]);
-    m.setIcon(icon);
-    m.setPopupContent(popup);
+    if (m._iconKey !== iconKey) {
+      m.setIcon(shipIcon(color, heading, vClass));
+      m._iconKey = iconKey;
+    }
+    if (m.isPopupOpen()) m.setPopupContent(buildVesselPopup(merged, vClass, color));
   } else {
-    const m = L.marker([merged.lat, merged.lon], { icon, zIndexOffset: 200, title: merged.name || mmsi });
-    m.bindPopup(popup, { maxWidth: 300, className: 'dark-popup' });
+    const m = L.marker([merged.lat, merged.lon], { icon: shipIcon(color, heading, vClass), zIndexOffset: 200, title: merged.name || mmsi });
+    m._iconKey = iconKey;
+    // Build popup HTML lazily, from the latest data, when it is opened.
+    m.bindPopup(() => {
+      const v = vesselDataStore.get(mmsi) || merged;
+      return buildVesselPopup(v, v.vessel_class || vClass, v.color || color);
+    }, { maxWidth: 300, className: 'dark-popup' });
     vesselMarkers.set(mmsi, m);
     // Add to map only if matches active filter
     if (currentVesselFilter === 'all' || vClass === currentVesselFilter) {
@@ -267,36 +280,39 @@ function upsertVessel(v) {
     }
   }
 
-  updateFilterCounts();
+  scheduleCountUpdate();
+}
+
+let countUpdatePending = false;
+function scheduleCountUpdate() {
+  if (countUpdatePending) return;
+  countUpdatePending = true;
+  requestAnimationFrame(() => { countUpdatePending = false; updateFilterCounts(); });
 }
 
 function buildVesselPopup(v, vClass, color) {
-  const name  = v.name  || `MMSI ${v.mmsi}`;
-  const speed = v.sog   != null ? `${Number(v.sog).toFixed(1)} kn` : '—';
-  const dest  = v.destination || '—';
-  const upd   = v.updated_at  ? new Date(v.updated_at).toLocaleTimeString('en-GB') : '—';
-  const draught = v.draught ? `${Number(v.draught).toFixed(1)}m` : '—';
-  const cargoStatus = v.cargo_status || (v.sog < 0.8 ? 'Storage / Drifting' : 'Underway');
-  const cargoClass = cargoStatus.includes('Laden') ? 'pill-laden' : cargoStatus.includes('Ballast') ? 'pill-ballast' : 'pill-storage';
+  const name    = esc(v.name || `MMSI ${v.mmsi}`);
+  const speed   = v.sog != null ? `${Number(v.sog).toFixed(1)} kn` : '—';
+  const upd     = v.updated_at ? formatUtcTimestamp(new Date(v.updated_at)) : '—';
+  const draught = v.draught ? `${Number(v.draught).toFixed(1)} m` : '—';
+  const cargo   = v.cargo_status || 'Unknown load';
+  const cargoClass = cargo.startsWith('Laden') ? 'pill-laden' : cargo.startsWith('Ballast') ? 'pill-ballast' : 'pill-storage';
+  const mmsi = encodeURIComponent(v.mmsi);
 
   return `
     <div>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <span class="tanker-class-tag" style="background:${color}22; color:${color}; border:1px solid ${color}66;">
-          ${v.vessel_desc || vClass}
-        </span>
-        <span class="cargo-pill ${cargoClass}">${cargoStatus}</span>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:6px;">
+        <span class="tanker-class-tag" style="background:${color}22; color:${color}; border:1px solid ${color}66;">${esc(v.vessel_desc || vClass)}</span>
+        <span class="cargo-pill ${cargoClass}" title="Estimated from crew-entered AIS draught">${esc(cargo)}</span>
       </div>
       <div class="popup-title">🚢 ${name}</div>
-      <div class="popup-row"><span class="lbl">MMSI</span><span class="val">${v.mmsi}</span></div>
-      <div class="popup-row"><span class="lbl">Dimensions</span><span class="val">${v.length || '—'}m &bull; Draft: ${draught}</span></div>
-      <div class="popup-row"><span class="lbl">Speed & Course</span><span class="val">${speed} &bull; ${Math.round(v.cog || 0)}&deg;</span></div>
-      <div class="popup-row"><span class="lbl">Destination</span><span class="val">${dest}</span></div>
-      ${v.callsign ? `<div class="popup-row"><span class="lbl">Callsign</span><span class="val">${v.callsign}</span></div>` : ''}
-      <div class="popup-row"><span class="lbl">Last Report</span><span class="val">${upd} UTC</span></div>
-      <a class="popup-link" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${v.mmsi}" target="_blank" rel="noopener">
-        View on MarineTraffic ↗
-      </a>
+      <div class="popup-row"><span class="lbl">MMSI</span><span class="val">${esc(v.mmsi)}</span></div>
+      <div class="popup-row"><span class="lbl">Length · draught</span><span class="val">${esc(v.length || '—')} m · ${draught}</span></div>
+      <div class="popup-row"><span class="lbl">Speed · course</span><span class="val">${speed} · ${Math.round(v.cog || 0)}° ${v.motion === 'Stationary' ? '(stationary)' : ''}</span></div>
+      <div class="popup-row"><span class="lbl">Destination</span><span class="val">${esc(v.destination || '—')}</span></div>
+      ${v.callsign ? `<div class="popup-row"><span class="lbl">Callsign</span><span class="val">${esc(v.callsign)}</span></div>` : ''}
+      <div class="popup-row"><span class="lbl">Last AIS report</span><span class="val">${upd}</span></div>
+      <a class="popup-link" href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}" target="_blank" rel="noopener">View on MarineTraffic ↗</a>
     </div>`;
 }
 
@@ -376,53 +392,6 @@ function updateLastSeenTimestamp(isoDateStr) {
   el.textContent = formatUtcTimestamp(d);
 }
 
-// ── WebSocket ─────────────────────────────────────────────────────────────────
-function connectWS() {
-  setStatus('connecting');
-  try {
-    ws = new WebSocket(WS_URL);
-  } catch (e) {
-    console.warn('WebSocket init exception:', e);
-    setTimeout(connectWS, 4000);
-    return;
-  }
-
-  ws.onopen = () => {
-    setStatus('live');
-    // Keep-alive ping every 25 s
-    ws._pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send('ping');
-    }, PING_MS);
-  };
-
-  ws.onmessage = ({ data }) => {
-    try {
-      const msg = JSON.parse(data);
-      if (msg.type === 'initial_load') {
-        msg.data.forEach(upsertVessel);
-        if (msg.latest_updated_at) {
-          updateLastSeenTimestamp(msg.latest_updated_at);
-        }
-      } else if (msg.type === 'vessel_update') {
-        upsertVessel(msg.data);
-        if (msg.data && msg.data.updated_at) {
-          updateLastSeenTimestamp(msg.data.updated_at);
-        }
-      }
-    } catch (e) { /* ignore */ }
-  };
-
-  ws.onclose = () => {
-    setStatus('connecting');
-    clearInterval(ws._pingInterval);
-    setTimeout(connectWS, 4000);
-  };
-
-  ws.onerror = () => {
-    ws.close();
-  };
-}
-
 function setStatus(state) {
   const dot = document.getElementById('update-dot') || document.querySelector('#conn-status .dot');
   if (dot) {
@@ -438,7 +407,7 @@ async function loadNews() {
     const list = document.getElementById('news-list');
 
     if (!news || !news.length) {
-      list.innerHTML = '<div class="news-empty">Fetching first batch of news…<br><small>~2 minutes on first run.</small></div>';
+      list.innerHTML = '<div class="news-empty">No news yet. The first fetch runs at startup.</div>';
       return;
     }
 
@@ -446,17 +415,17 @@ async function loadNews() {
       const dateStr = item.published
         ? new Date(item.published).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })
         : '';
-      const sent = (item.sentiment || 'neutral').toLowerCase();
-      const sentBadge = `<span class="news-sentiment sent-${sent}">${sent.toUpperCase()}</span>`;
+      const sent = ['bullish', 'bearish'].includes(item.sentiment) ? item.sentiment : 'neutral';
+      const sentBadge = `<span class="news-sentiment sent-${sent}" title="Keyword-based tone for oil prices, not a forecast">${sent.toUpperCase()}</span>`;
       return `
         <div class="news-card">
           <div class="news-meta">
-            <span class="news-src">${item.source || '—'}</span>
+            <span class="news-src">${esc(item.source || '—')}</span>
             ${sentBadge}
             <span class="news-date">${dateStr}</span>
           </div>
-          <a class="news-title" href="${item.link}" target="_blank" rel="noopener">${item.title}</a>
-          ${item.ai_brief ? `<div class="news-brief">🤖 ${item.ai_brief}</div>` : ''}
+          <a class="news-title" href="${safeUrl(item.link)}" target="_blank" rel="noopener">${esc(item.title)}</a>
+          ${item.ai_brief ? `<div class="news-brief">🤖 ${esc(item.ai_brief)}</div>` : ''}
         </div>`;
     }).join('');
   } catch (e) {
@@ -487,13 +456,15 @@ async function loadIncidents() {
       });
 
       const shortDesc = sanitizeSentences(inc.description, 3);
+      const sev = inc.severity === 'warning' ? 'warning' : 'advisory';
       m.bindPopup(`
         <div>
-          <div class="popup-title">⚠ ${inc.title}</div>
-          <div class="popup-row"><span class="lbl">Area</span><span class="val">${inc.area || '—'}</span></div>
-          <div class="popup-row"><span class="lbl">Severity</span><span class="val risk-${inc.severity || 'advisory'}">${(inc.severity || 'advisory').toUpperCase()}</span></div>
-          <div class="popup-row"><span class="lbl">Source</span><span class="val">${inc.source || 'UKMTO'}</span></div>
-          ${shortDesc ? `<p class="popup-desc">${shortDesc}</p>` : ''}
+          <div class="popup-title">⚠ ${esc(inc.title)}</div>
+          <div class="popup-row"><span class="lbl">Area</span><span class="val">${esc(inc.area || '—')} (area-level position)</span></div>
+          <div class="popup-row"><span class="lbl">Type</span><span class="val risk-${sev}">${sev.toUpperCase()}</span></div>
+          <div class="popup-row"><span class="lbl">Source</span><span class="val">${esc(inc.source || 'News')}</span></div>
+          ${shortDesc ? `<p class="popup-desc">${esc(shortDesc)}</p>` : ''}
+          ${inc.link ? `<a class="popup-link" href="${safeUrl(inc.link)}" target="_blank" rel="noopener">Read the report ↗</a>` : ''}
         </div>
       `, { maxWidth: 300, className: 'dark-popup' });
 
@@ -511,27 +482,33 @@ async function loadIncidents() {
     const incList = document.getElementById('incidents-list');
     if (incList) {
       if (!currentIncidents.length) {
-        incList.innerHTML = '<div class="news-empty">No active security alerts reported.</div>';
+        incList.innerHTML = '<div class="news-empty">No security alerts in recent news.<br><small>Official advisories: <a href="https://www.ukmto.org/recent-incidents" target="_blank" rel="noopener">UKMTO</a></small></div>';
       } else {
-        incList.innerHTML = currentIncidents.map(inc => {
+        incList.innerHTML = '<div class="inc-note">Derived from news reports and plotted at the named sea area, not the exact position. Official advisories: <a href="https://www.ukmto.org/recent-incidents" target="_blank" rel="noopener">UKMTO</a>.</div>' +
+          currentIncidents.map((inc, i) => {
           const sevClass = inc.severity === 'warning' ? 'risk-high' : 'risk-medium';
           const dateStr = inc.published_at ? new Date(inc.published_at).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
-          const shortDesc = sanitizeSentences(inc.description, 3);
-          const safeTitle = (inc.title || '').replace(/'/g, "\\'");
+          const shortDesc = sanitizeSentences(inc.description, 2);
           return `
-            <div class="inc-card" onclick="flyToIncident(${inc.lat}, ${inc.lon}, '${safeTitle}')">
+            <div class="inc-card" data-idx="${i}">
               <div class="inc-card-hdr">
-                <span class="inc-card-area">📍 ${inc.area || 'Maritime Zone'}</span>
-                <span class="inc-card-sev ${sevClass}">${(inc.severity || 'advisory').toUpperCase()}</span>
+                <span class="inc-card-area">📍 ${esc(inc.area || 'Maritime area')}</span>
+                <span class="inc-card-sev ${sevClass}">${inc.severity === 'warning' ? 'WARNING' : 'ADVISORY'}</span>
               </div>
-              <div class="inc-card-title">⚠️ ${inc.title}</div>
-              <div class="inc-card-desc">${shortDesc}</div>
+              <div class="inc-card-title">${esc(inc.title)}</div>
+              <div class="inc-card-desc">${esc(shortDesc)}</div>
               <div class="inc-card-meta">
-                <span>Source: ${inc.source || 'UKMTO'}</span>
+                <span>${inc.link ? `<a href="${safeUrl(inc.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(inc.source || 'News')} ↗</a>` : esc(inc.source || 'News')}</span>
                 <span>${dateStr}</span>
               </div>
             </div>`;
         }).join('');
+        incList.querySelectorAll('.inc-card[data-idx]').forEach(el => {
+          el.addEventListener('click', () => {
+            const inc = currentIncidents[Number(el.dataset.idx)];
+            if (inc) flyToIncident(inc.lat, inc.lon);
+          });
+        });
       }
     }
   } catch (e) {
@@ -539,7 +516,7 @@ async function loadIncidents() {
   }
 }
 
-function flyToIncident(lat, lon, title) {
+function flyToIncident(lat, lon) {
   if (lat == null || lon == null || !map) return;
   map.flyTo([lat, lon], 7, { duration: 1.2 });
   const m = incidentMarkers.find(marker => {
@@ -593,8 +570,10 @@ function geocodeNews(article) {
   for (const region of NEWS_GEO_REGIONS) {
     if (region.keywords.some(kw => text.includes(kw))) {
       // Add slight jitter so multiple pins in the same region don't perfectly overlap
-      const jitterLat = (Math.random() - 0.5) * 1.5;
-      const jitterLon = (Math.random() - 0.5) * 2.0;
+      let h = 0;
+      for (const ch of (article.link || article.title || '')) h = (h * 31 + ch.charCodeAt(0)) | 0;
+      const jitterLat = (((h & 0xff) / 255) - 0.5) * 1.5;
+      const jitterLon = ((((h >> 8) & 0xff) / 255) - 0.5) * 2.0;
       return {
         lat: region.coords[0] + jitterLat,
         lon: region.coords[1] + jitterLon,
@@ -663,16 +642,16 @@ function toggleNewsOnMap() {
     const popupHtml = `
       <div class="news-map-popup">
         <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">
-          📍 ${loc.regionName}
+          📍 ${esc(loc.regionName)} (approximate)
         </div>
-        <div class="popup-title">${art.title}</div>
+        <div class="popup-title">${esc(art.title)}</div>
         <div style="display:flex; gap:8px; align-items:center; margin:6px 0;">
-          <span style="font-size:11px; font-weight:700; color:#00d4ff;">${art.source || 'Intel'}</span>
+          <span style="font-size:11px; font-weight:700; color:#00d4ff;">${esc(art.source || 'News')}</span>
           ${sentBadge}
           <span style="font-size:11px; color:#888;">${dateStr}</span>
         </div>
-        ${art.ai_brief ? `<div class="news-brief" style="margin-top:6px; font-size:11.5px; line-height:1.4;">🤖 ${art.ai_brief}</div>` : ''}
-        ${art.link ? `<a class="popup-link" href="${art.link}" target="_blank" rel="noopener" style="margin-top:8px; display:inline-block;">Read Original Article ↗</a>` : ''}
+        ${art.ai_brief ? `<div class="news-brief" style="margin-top:6px; font-size:11.5px; line-height:1.4;">🤖 ${esc(art.ai_brief)}</div>` : ''}
+        ${art.link ? `<a class="popup-link" href="${safeUrl(art.link)}" target="_blank" rel="noopener" style="margin-top:8px; display:inline-block;">Read original article ↗</a>` : ''}
       </div>
     `;
 
@@ -724,8 +703,9 @@ let analysisLoaded = false;
 
 async function loadAnalysis(force = false) {
   const memoEl = document.getElementById('ai-memo-content');
+  const factsEl = document.getElementById('facts-list');
   if (force || !analysisLoaded) {
-    memoEl.innerHTML = '<div class="memo-loading">⏳ Synthesizing market data, marginal cost curves, and AI diagnosis...</div>';
+    memoEl.innerHTML = '<div class="memo-loading">Loading…</div>';
   }
 
   try {
@@ -733,71 +713,70 @@ async function loadAnalysis(force = false) {
     const data = await res.json();
     analysisLoaded = true;
 
+    if (!data.available) {
+      factsEl.innerHTML = `<li>${esc(data.error || 'Market data unavailable.')}</li>`;
+      memoEl.innerHTML = '<div class="memo-loading">No commentary without market data.</div>';
+      return;
+    }
+
     const q = data.quotes || {};
-    const fv = data.fair_value || {};
+    const ctx = data.context || {};
+    const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    const ctxLine = (key, fallback) => {
+      const c = ctx[key];
+      return c ? `${ordinal(c.percentile_5y)} pct of 5y · z ${fmtSigned(c.z_5y)}` : fallback;
+    };
 
-    // 1. Live Market Tickers
-    document.getElementById('mkt-brent').textContent = q.brent != null ? `$${Number(q.brent).toFixed(2)}` : '--';
-    document.getElementById('mkt-wti').textContent = q.wti != null ? `$${Number(q.wti).toFixed(2)}` : '--';
-    
-    if (fv.brent_wti_spread != null) {
-      document.getElementById('mkt-spread').textContent = `+$${Number(fv.brent_wti_spread).toFixed(2)}`;
-      document.getElementById('mkt-spread-desc').textContent = fv.spread_assessment || 'Transatlantic Arb';
-    }
-    document.getElementById('mkt-natgas').textContent = q.natgas != null ? `$${Number(q.natgas).toFixed(2)}` : '--';
+    setText('mkt-brent', q.brent != null ? `$${fmtNum(q.brent)}` : '--');
+    setText('ctx-brent', ctxLine('brent', 'ICE Brent'));
+    setText('mkt-wti', q.wti != null ? `$${fmtNum(q.wti)}` : '--');
+    setText('ctx-wti', ctxLine('wti', 'NYMEX WTI, Cushing'));
+    setText('mkt-spread', q.spread != null ? `${q.spread < 0 ? '−' : '+'}$${fmtNum(Math.abs(q.spread))}` : '--');
+    setText('ctx-spread', ctxLine('spread', 'Seaborne vs inland crude'));
+    setText('mkt-crack', q.crack_321 != null ? `$${fmtNum(q.crack_321)}` : '--');
+    setText('ctx-crack_321', ctxLine('crack_321', 'US refining margin'));
+    setText('mkt-natgas', q.natgas != null ? `$${fmtNum(q.natgas)}` : '--');
+    setText('ctx-natgas', ctxLine('natgas', '$/MMBtu'));
 
-    // Crack Spread
-    const crackEl = document.getElementById('mkt-crack');
-    if (crackEl) {
-      crackEl.textContent = q.crack_spread != null ? `$${Number(q.crack_spread).toFixed(2)}` : '--';
-    }
-    const crackDescEl = document.getElementById('mkt-crack-desc');
-    if (crackDescEl && q.crack_spread != null) {
-      crackDescEl.textContent = q.crack_spread > 30 ? 'High Margin (Strong Crude Run)' : 'Standard Margin';
-    }
-
-    // Term Structure
     const termEl = document.getElementById('mkt-term');
-    if (termEl) {
-      if (q.timespread != null) {
-        termEl.textContent = q.timespread > 0 ? `+${q.timespread.toFixed(2)} Backw.` : `${q.timespread.toFixed(2)} Contango`;
-        termEl.style.color = q.timespread > 0 ? '#34d399' : '#f87171';
-      } else {
-        termEl.textContent = q.term_structure || 'Flat';
-      }
-    }
-    const termDescEl = document.getElementById('mkt-term-desc');
-    if (termDescEl) {
-      termDescEl.textContent = (q.timespread || 0) > 0 ? 'Prompt Scarcity / Tightness' : 'Inventory Build / Storage';
-    }
-
-    // 2. Valuation Status Badge
-    const badge = document.getElementById('val-status-badge');
-    badge.textContent = fv.valuation || 'Fair Value';
-    badge.className = 'val-status-badge';
-    if ((fv.valuation || '').includes('Overvalued')) {
-      badge.classList.add('overvalued');
-    } else if ((fv.valuation || '').includes('Undervalued')) {
-      badge.classList.add('undervalued');
+    const cs = q.calendar_spread;
+    const c = q.contracts || {};
+    setText('mkt-term-label', `WTI ${(c.wti_m1 || 'M1').split('.')[0]} − ${(c.wti_m2 || 'M2').split('.')[0]}`);
+    if (cs != null) {
+      termEl.textContent = `${fmtSigned(cs)} $/bbl`;
+      termEl.style.color = cs > 0.05 ? '#34d399' : cs < -0.05 ? '#f87171' : '';
+      setText('mkt-term-desc', cs > 0.05 ? 'Backwardation: tight prompt supply' : cs < -0.05 ? 'Contango: ample prompt supply' : 'Flat curve');
     } else {
-      badge.classList.add('fair');
+      termEl.textContent = '--';
     }
 
-    // 3. Rationale & Fair Band
-    document.getElementById('val-rationale').textContent = fv.rationale || 'Analysis complete.';
-    if (fv.fair_value_min && fv.fair_value_max) {
-      document.getElementById('fair-band-range').textContent = `$${fv.fair_value_min.toFixed(2)} - $${fv.fair_value_max.toFixed(2)} / bbl`;
-    }
+    factsEl.innerHTML = (data.summary || []).map(l => `<li>${esc(l)}</li>`).join('') || '<li>No data.</li>';
 
-    // 4. AI Memo Content
-    if (data.ai_memo) {
-      memoEl.textContent = data.ai_memo;
+    // Reference levels with a Brent marker
+    const levels = data.reference_levels || [];
+    const maxVal = Math.max(120, ...(levels.map(l => l.value)), q.brent || 0) * 1.05;
+    const brentPct = q.brent != null ? (q.brent / maxVal) * 100 : null;
+    document.getElementById('ref-levels').innerHTML = levels.map(l => `
+      <div class="cost-row" title="${esc(l.note)}">
+        <span class="cost-name">${esc(l.name)}</span>
+        <div class="cost-bar-wrapper">
+          <div class="cost-bar" style="width:${(l.value / maxVal) * 100}%; background:${q.brent != null && q.brent >= l.value ? '#22c55e' : '#f59e0b'}"></div>
+          ${brentPct != null ? `<div class="brent-marker" style="left:${brentPct}%" title="Brent $${fmtNum(q.brent)}"></div>` : ''}
+        </div>
+        <span class="cost-val">~$${l.value}</span>
+      </div>`).join('') + (q.brent != null ? `<div class="ref-legend"><span class="brent-marker-key"></span> Brent $${fmtNum(q.brent)}</div>` : '');
+
+    const asof = q.brent_asof || q.wti_asof;
+    setText('analysis-sub', `Front-month futures${asof ? ` as of ${asof}` : ''}, each ranked against its own last 5 years · source: Yahoo Finance`);
+
+    if (data.ai_commentary) {
+      memoEl.textContent = data.ai_commentary;
     } else {
-      memoEl.innerHTML = '<div class="memo-loading">AI synthesis complete. Configure GEMINI_API_KEY for dynamic commentary.</div>';
+      memoEl.innerHTML = '<div class="memo-loading">Set GEMINI_API_KEY to add AI commentary. The facts on the left are computed directly from market data.</div>';
     }
   } catch (e) {
     console.error('Error loading analysis:', e);
-    memoEl.innerHTML = `<div class="memo-loading" style="color:var(--danger)">Failed to load price discovery model: ${e.message}</div>`;
+    memoEl.innerHTML = `<div class="memo-loading" style="color:var(--danger)">Failed to load market data: ${esc(e.message)}</div>`;
   }
 }
 
@@ -806,7 +785,7 @@ let currentAnalysisMode = 'cards';
 let historical10yData = null;
 let chartInstances = {};
 let isSyncHovering = false;
-let visibleZoomWindow = { start: 0, end: 128 }; // index range in dates array
+let visibleZoomWindow = { start: 0, end: 0 }; // index range in dates array
 
 function setAnalysisMode(mode) {
   currentAnalysisMode = mode;
@@ -838,6 +817,11 @@ async function initOrUpdateSyncCharts() {
     try {
       const res = await fetch(`${API}/historical-data`);
       historical10yData = await res.json();
+      if (!historical10yData.available || !historical10yData.dates.length) {
+        document.getElementById('market-charts-grid').innerHTML = '<div class="memo-loading">Historical data unavailable right now (Yahoo Finance did not respond).</div>';
+        historical10yData = null;
+        return;
+      }
       visibleZoomWindow.end = historical10yData.dates.length - 1;
     } catch (e) {
       console.error('Failed to load historical 10Y data:', e);
@@ -845,15 +829,9 @@ async function initOrUpdateSyncCharts() {
     }
   }
 
-  const keys = ['brent', 'wti', 'spread', 'crack', 'timespread', 'natgas'];
-  const seriesKeysMap = {
-    brent: 'brent',
-    wti: 'wti',
-    spread: 'spread',
-    crack: 'crack_spread',
-    timespread: 'timespread',
-    natgas: 'natgas'
-  };
+  const keys = ['brent', 'wti', 'spread', 'crack', 'natgas'];
+  const seriesKeysMap = { brent: 'brent', wti: 'wti', spread: 'spread', crack: 'crack_321', natgas: 'natgas' };
+  const SERIES_COLORS = { brent: '#ff6b35', wti: '#00d4ff', spread: '#a855f7', crack_321: '#f59e0b', natgas: '#38bdf8' };
 
   keys.forEach(key => {
     const canvasId = `canvas-${key}`;
@@ -868,6 +846,7 @@ async function initOrUpdateSyncCharts() {
     const sKey = seriesKeysMap[key];
     const s = historical10yData.series[sKey];
     if (!s) return;
+    s.color = s.color || SERIES_COLORS[sKey] || '#94a3b8';
 
     const ctx = canvas.getContext('2d');
     const gradient = ctx.createLinearGradient(0, 0, 0, 200);
@@ -914,7 +893,7 @@ async function initOrUpdateSyncCharts() {
             displayColors: false,
             callbacks: {
               title: (items) => `Date: ${items[0].label}`,
-              label: (item) => `${s.name}: $${Number(item.raw).toFixed(2)} ${s.unit}`
+              label: (item) => item.raw == null ? 'n/a' : `${s.name}: ${Number(item.raw).toFixed(2)} ${s.unit}`
             }
           }
         },
@@ -940,7 +919,7 @@ async function initOrUpdateSyncCharts() {
             ticks: {
               color: '#64748b',
               font: { size: 10, family: 'var(--mono)' },
-              callback: (val) => `$${val}`
+              callback: (val) => (s.unit.startsWith('$') ? `$${val}` : val)
             },
             grid: {
               color: 'rgba(255, 255, 255, 0.05)',
@@ -979,15 +958,13 @@ function updateSyncReadouts(idx) {
     brent: historical10yData.series.brent,
     wti: historical10yData.series.wti,
     spread: historical10yData.series.spread,
-    crack: historical10yData.series.crack_spread,
-    timespread: historical10yData.series.timespread,
+    crack: historical10yData.series.crack_321,
     natgas: historical10yData.series.natgas,
   };
   for (const [k, s] of Object.entries(seriesMap)) {
     const el = document.getElementById(`sync-${k}`);
     if (el && s && s.data[idx] != null) {
-      const val = Number(s.data[idx]).toFixed(2);
-      el.textContent = `${dateStr}: $${val} ${s.unit}`;
+      el.textContent = `${dateStr}: ${Number(s.data[idx]).toFixed(2)} ${s.unit}`;
     }
   }
 }
@@ -1066,8 +1043,7 @@ let wsPollingFallbackInterval = null;
 
 function startVesselPollingFallback() {
   if (wsPollingFallbackInterval) return;
-  console.log('Activating REST polling fallback for vessels (cloud/serverless mode)');
-  wsPollingFallbackInterval = setInterval(loadInitialVessels, 10000);
+  wsPollingFallbackInterval = setInterval(loadInitialVessels, 30000);
 }
 
 function connectWS() {
@@ -1075,9 +1051,9 @@ function connectWS() {
     ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
-      console.log('✓ Connected to live vessel stream via WebSocket');
-      const dot = document.getElementById('update-dot');
-      if (dot) dot.classList.add('live');
+      setStatus('live');
+      clearInterval(ws._pingInterval);
+      ws._pingInterval = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('ping'); }, PING_MS);
       if (wsPollingFallbackInterval) {
         clearInterval(wsPollingFallbackInterval);
         wsPollingFallbackInterval = null;
@@ -1087,24 +1063,26 @@ function connectWS() {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'vessel' && msg.data) {
+        if (msg.type === 'initial_load' || msg.type === 'vessel_batch') {
+          (msg.data || []).forEach(upsertVessel);
+          const ts = msg.latest_updated_at || (msg.data && msg.data.length ? msg.data[msg.data.length - 1].updated_at : null);
+          if (ts) updateLastSeenTimestamp(ts);
+        } else if (msg.type === 'vessel_update' && msg.data) {
           upsertVessel(msg.data);
-          if (msg.data.updated_at) {
-            updateLastSeenTimestamp(msg.data.updated_at);
-          }
+          if (msg.data.updated_at) updateLastSeenTimestamp(msg.data.updated_at);
         }
       } catch (err) {
         console.warn('Error parsing incoming WS message:', err);
       }
     };
 
-    ws.onerror = (err) => {
-      console.warn('WebSocket unavailable or failed, switching to REST polling:', err);
+    ws.onerror = () => {
       startVesselPollingFallback();
     };
 
     ws.onclose = () => {
-      console.log('WebSocket closed. Active fallback: polling /api/vessels.');
+      setStatus('connecting');
+      clearInterval(ws._pingInterval);
       startVesselPollingFallback();
       // Try to reconnect in 15 seconds if on standard persistent host
       setTimeout(() => {
@@ -1140,6 +1118,13 @@ async function init() {
   if (hostEl && location.host) {
     hostEl.textContent = `OilWatch v1.1 · ${location.host}`;
   }
+  // Explain an empty map instead of leaving it mysterious.
+  fetch(`${API}/health`).then(r => r.json()).then(h => {
+    if (!h.ais_enabled) {
+      const el = document.getElementById('vessel-last-updated');
+      if (el) el.textContent = h.mode === 'serverless' ? 'Live AIS needs a persistent host' : 'Set AISSTREAM_API_KEY for live tankers';
+    }
+  }).catch(() => {});
 
   initMap();
   connectWS();

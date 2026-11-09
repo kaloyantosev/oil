@@ -1,88 +1,43 @@
-"""
-EIA Oil Price Collector
-Fetches Brent and WTI crude spot prices from the US EIA free API.
-"""
+"""EIA daily spot prices (Brent, WTI). Optional: needs EIA_API_KEY."""
 import logging
-import sqlite3
 from datetime import datetime, timezone
 
 import requests
 
 from config import settings
-from database import DB_PATH
+from database import get_conn
 
 logger = logging.getLogger(__name__)
 
-EIA_BASE = "https://api.eia.gov/v2"
-
-PRICE_QUERIES = [
-    {
-        "product": "Brent Crude",
-        "series":  "RBRTE",   # Europe Brent Spot Price FOB (Dollars per Barrel)
-    },
-    {
-        "product": "WTI Crude",
-        "series":  "RWTC",    # Cushing, OK WTI Spot Price FOB (Dollars per Barrel)
-    },
-]
+SERIES = {"Brent Crude": "RBRTE", "WTI Crude": "RWTC"}
 
 
 def fetch_oil_prices():
-    """Fetch Brent and WTI spot prices from the EIA v2 API."""
-    if not settings.EIA_API_KEY or settings.EIA_API_KEY == "your_eia_key_here":
-        logger.warning("⚠  EIA API key not configured — oil prices disabled.")
+    if not settings.EIA_API_KEY:
+        logger.info("EIA_API_KEY not set: skipping EIA spot prices (market data still comes from futures).")
         return
-
-    logger.info("Fetching oil prices from EIA...")
-
-    for q in PRICE_QUERIES:
+    now = datetime.now(timezone.utc).isoformat()
+    for product, series in SERIES.items():
         try:
-            params = {
-                "api_key":              settings.EIA_API_KEY,
-                "frequency":            "daily",
-                "data[0]":              "value",
-                "facets[series][]":     q["series"],
-                "sort[0][column]":      "period",
-                "sort[0][direction]":   "desc",
-                "length":               "5",
-            }
             r = requests.get(
-                f"{EIA_BASE}/petroleum/pri/spt/data/",
-                params=params,
+                "https://api.eia.gov/v2/petroleum/pri/spt/data/",
+                params={
+                    "api_key": settings.EIA_API_KEY, "frequency": "daily", "data[0]": "value",
+                    "facets[series][]": series, "sort[0][column]": "period", "sort[0][direction]": "desc",
+                    "length": "5",
+                },
                 timeout=15,
             )
             r.raise_for_status()
-            data = r.json()
-            items = data.get("response", {}).get("data", [])
-
+            items = [i for i in r.json().get("response", {}).get("data", []) if i.get("value") is not None]
             if not items:
-                logger.warning(f"EIA returned no data for {q['product']}")
+                logger.warning(f"EIA returned no data for {product}")
                 continue
-
-            with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
-                for item in items[:3]:
-                    period = item.get("period", "")
-                    value  = item.get("value")
-                    if value is None:
-                        continue
-                    conn.execute("""
-                        INSERT OR REPLACE INTO oil_prices (product, price, period, updated_at)
-                        VALUES (?, ?, ?, ?)
-                    """, (
-                        q["product"],
-                        float(value),
-                        period,
-                        datetime.now(timezone.utc).isoformat(),
-                    ))
-                conn.commit()
-
-            latest = items[0]
-            logger.info(
-                f"  {q['product']}: ${latest.get('value', '?'):.2f}/bbl "
-                f"({latest.get('period', '')})"
-            )
-
-        except requests.HTTPError as e:
-            logger.error(f"EIA HTTP error for {q['product']}: {e.response.status_code} — {e.response.text[:200]}")
+            with get_conn() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO oil_prices (product, price, period, updated_at) VALUES (?,?,?,?)",
+                    [(product, float(i["value"]), i["period"], now) for i in items],
+                )
+            logger.info(f"EIA {product}: ${float(items[0]['value']):.2f}/bbl ({items[0]['period']})")
         except Exception as e:
-            logger.error(f"EIA fetch error for {q['product']}: {e}")
+            logger.error(f"EIA {product}: {e}")
