@@ -5,21 +5,24 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:          #070c18;
-  --bg-panel:    rgba(7, 12, 28, 0.93);
-  --bg-hover:    rgba(255,255,255,0.05);
-  --accent:      #00d4ff;
-  --accent-dim:  rgba(0, 212, 255, 0.12);
-  --accent-mid:  rgba(0, 212, 255, 0.25);
-  --text:        #dde6f0;
-  --text-dim:    #7a91aa;
-  --border:      rgba(0, 212, 255, 0.18);
-  --danger:      #ef4444;
-  --warn:        #f59e0b;
-  --ok:          #22c55e;
-  --radius:      7px;
-  --font:        'Segoe UI', system-ui, -apple-system, sans-serif;
-  --mono:        'Courier New', 'Consolas', monospace;
+  /* Palette, type and radius from the Credit Cycle Monitor (cot-xunw.vercel.app), dark scheme */
+  --bg:          #0c0c0e;
+  --bg-panel:    rgba(22, 22, 26, 0.96);
+  --surface:     #16161a;
+  --bg-hover:    rgba(255,255,255,0.04);
+  --accent:      #60a5fa;
+  --accent-dim:  rgba(96, 165, 250, 0.12);
+  --accent-mid:  rgba(96, 165, 250, 0.25);
+  --text:        #ececf0;
+  --text-dim:    #91919b;
+  --border:      #2a2a30;
+  --danger:      #f87171;
+  --warn:        #fbbf24;
+  --ok:          #34d399;
+  --radius:      10px;
+  --font:        system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono:        system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
 }
 
 html, body {
@@ -28,7 +31,9 @@ html, body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ── Layout ─────────────────────────────────────────────────── */
@@ -79,9 +84,9 @@ html, body {
   font-weight: 800;
   font-size: 16px;
   color: var(--accent);
-  letter-spacing: .07em;
+  
   white-space: nowrap;
-  text-transform: uppercase;
+  
 }
 #logo .tanker-icon { font-size: 20px; }
 
@@ -105,8 +110,8 @@ html, body {
 .tick-name {
   font-size: 10px;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: .06em;
+  
+  
 }
 .tick-price {
   font-family: var(--mono);
@@ -132,7 +137,7 @@ html, body {
   gap: 5px;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: .1em;
+  
 }
 .dot {
   width: 8px; height: 8px;
@@ -148,7 +153,7 @@ html, body {
 #map {
   flex: 1;
   height: 100%;
-  background: #050912;
+  background: #0c0c0e;
 }
 
 /* ── Map overlays ────────────────────────────────────────────── */
@@ -175,8 +180,8 @@ html, body {
 }
 .stat-label {
   font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: .12em;
+  
+  
   color: var(--text-dim);
   margin-bottom: 2px;
 }
@@ -217,7 +222,7 @@ html, body {
   background: var(--accent-dim);
   color: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 0 10px rgba(0, 212, 255, 0.25);
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.25);
 }
 .vf-dot {
   width: 8px;
@@ -247,8 +252,8 @@ html, body {
 .leg-title {
   font-size: 9px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .12em;
+  
+  
   color: var(--accent);
   margin-bottom: 6px;
 }
@@ -293,8 +298,8 @@ html, body {
 #sb-title {
   font-size: 10px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .15em;
+  
+  
   color: var(--accent);
 }
 .sb-header-btns {
@@ -319,10 +324,10 @@ html, body {
   border-color: var(--accent);
 }
 .sb-btn.active {
-  background: rgba(0, 212, 255, 0.25);
+  background: rgba(96, 165, 250, 0.25);
   color: #fff;
   border-color: var(--accent);
-  box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.4);
 }
 
 .sidebar-reopen-btn {
@@ -338,7 +343,7 @@ html, body {
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 0 15px rgba(0, 212, 255, 0.35);
+  box-shadow: 0 0 15px rgba(96, 165, 250, 0.35);
   backdrop-filter: blur(8px);
   display: none;
   align-items: center;
@@ -347,7 +352,7 @@ html, body {
 }
 .sidebar-reopen-btn:hover {
   background: var(--accent-dim);
-  box-shadow: 0 0 20px rgba(0, 212, 255, 0.6);
+  box-shadow: 0 0 20px rgba(96, 165, 250, 0.6);
   transform: translateY(-1px);
 }
 .sidebar-reopen-btn.visible {
@@ -382,8 +387,8 @@ html, body {
 .news-src {
   font-size: 9px;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .08em;
+  
+  
   color: var(--accent);
 }
 .news-date { font-size: 9px; color: var(--text-dim); }
@@ -422,13 +427,13 @@ html, body {
 
 /* ── Leaflet overrides ───────────────────────────────────────── */
 .dark-popup .leaflet-popup-content-wrapper {
-  background: #0b1122 !important;
+  background: #16161a !important;
   border: 1px solid var(--border) !important;
   box-shadow: 0 6px 28px rgba(0,0,0,.55) !important;
   border-radius: var(--radius) !important;
   color: var(--text) !important;
 }
-.dark-popup .leaflet-popup-tip { background: #0b1122 !important; }
+.dark-popup .leaflet-popup-tip { background: #16161a !important; }
 .dark-popup .leaflet-popup-close-button { color: var(--text-dim) !important; top:6px!important; right:8px!important; }
 
 .popup-title {
@@ -520,7 +525,7 @@ html, body {
   background: var(--accent-dim);
   border-color: var(--accent);
   color: var(--accent);
-  box-shadow: 0 0 10px rgba(0, 212, 255, 0.2);
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.2);
 }
 
 /* ── View Panels ─────────────────────────────────────────────── */
@@ -537,7 +542,7 @@ html, body {
 /* ── Analysis Dashboard Styling ──────────────────────────────── */
 #view-analysis {
   overflow-y: auto;
-  background: #060a16;
+  background: #0c0c0e;
 }
 .analysis-container {
   max-width: 1380px;
@@ -559,7 +564,7 @@ html, body {
   font-size: 20px;
   font-weight: 800;
   color: var(--accent);
-  letter-spacing: 0.05em;
+  
   margin-bottom: 4px;
 }
 .analysis-sub {
@@ -579,7 +584,7 @@ html, body {
 }
 .refresh-analysis-btn:hover {
   background: var(--accent-mid);
-  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
+  box-shadow: 0 0 12px rgba(96, 165, 250, 0.3);
 }
 
 /* ── Market Bar Grid ─────────────────────────────────────────── */
@@ -599,8 +604,8 @@ html, body {
 }
 .mkt-label {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  
+  
   color: var(--text-dim);
 }
 .mkt-price {
@@ -639,7 +644,7 @@ html, body {
   color: var(--accent);
   border-bottom: 1px solid var(--border);
   padding-bottom: 10px;
-  letter-spacing: 0.04em;
+  
 }
 
 /* ── Valuation Badge & Card ──────────────────────────────────── */
@@ -651,8 +656,8 @@ html, body {
 .val-status-label {
   font-size: 12px;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  
+  
 }
 .val-status-badge {
   display: inline-block;
@@ -660,25 +665,25 @@ html, body {
   border-radius: 20px;
   font-weight: 700;
   font-size: 11px;
-  letter-spacing: 0.05em;
-  background: rgba(0, 212, 255, 0.15);
+  
+  background: rgba(96, 165, 250, 0.15);
   color: var(--accent);
   border: 1px solid var(--accent);
 }
 .val-status-badge.overvalued {
   background: rgba(239, 68, 68, 0.15);
   color: #f87171;
-  border-color: #ef4444;
+  border-color: #f87171;
 }
 .val-status-badge.undervalued {
   background: rgba(245, 158, 11, 0.15);
   color: #fbbf24;
-  border-color: #f59e0b;
+  border-color: #fbbf24;
 }
 .val-status-badge.fair {
   background: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
-  border-color: #22c55e;
+  color: #34d399;
+  border-color: #34d399;
 }
 
 .val-rationale {
@@ -702,8 +707,8 @@ html, body {
 }
 .fair-band-title {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  
+  
   color: var(--accent);
   font-weight: 700;
 }
@@ -727,8 +732,8 @@ html, body {
 }
 .sec-title {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  
+  
   color: var(--text-dim);
   font-weight: 700;
   margin-bottom: 2px;
@@ -794,7 +799,7 @@ html, body {
   padding: 2px 8px;
   border-radius: 4px;
   margin-bottom: 6px;
-  letter-spacing: 0.04em;
+  
 }
 .cargo-pill {
   display: inline-block;
@@ -802,8 +807,8 @@ html, body {
   border-radius: 12px;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  
+  
 }
 .pill-laden {
   background: rgba(16, 185, 129, 0.2);
@@ -812,7 +817,7 @@ html, body {
 }
 .pill-ballast {
   background: rgba(148, 163, 184, 0.15);
-  color: #cbd5e1;
+  color: #ececf0;
   border: 1px solid rgba(148, 163, 184, 0.3);
 }
 .pill-storage {
@@ -828,12 +833,12 @@ html, body {
   border-radius: 3px;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  
+  
 }
 .sent-bullish {
   background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
+  color: #34d399;
   border: 1px solid rgba(34, 197, 94, 0.4);
 }
 .sent-bearish {
@@ -843,14 +848,14 @@ html, body {
 }
 .sent-neutral {
   background: rgba(148, 163, 184, 0.15);
-  color: #94a3b8;
+  color: #91919b;
   border: 1px solid rgba(148, 163, 184, 0.3);
 }
 
 /* ── Highlight Card (Crack Spread / Curve) ────────────────────── */
 .market-card.highlight-card {
   border-color: rgba(245, 158, 11, 0.35);
-  background: linear-gradient(145deg, rgba(7, 12, 28, 0.95), rgba(245, 158, 11, 0.06));
+  background: linear-gradient(145deg, rgba(22, 22, 26, 0.95), rgba(245, 158, 11, 0.06));
 }
 
 /* ── Header Last Update Info Box ─────────────────────────────── */
@@ -859,7 +864,7 @@ html, body {
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  background: rgba(0, 212, 255, 0.06);
+  background: rgba(96, 165, 250, 0.06);
   border: 1px solid var(--border);
   padding: 4px 12px;
   border-radius: 20px;
@@ -867,7 +872,7 @@ html, body {
 .update-lbl {
   color: var(--text-dim);
   font-size: 10px;
-  letter-spacing: 0.08em;
+  
   font-weight: 700;
 }
 .update-timestamp {
@@ -895,15 +900,15 @@ html, body {
 }
 .news-map-pin.sent-bullish .news-pin-pulse {
   background: rgba(34, 197, 94, 0.35);
-  border: 2px solid #22c55e;
+  border: 2px solid #34d399;
 }
 .news-map-pin.sent-bearish .news-pin-pulse {
   background: rgba(239, 68, 68, 0.35);
-  border: 2px solid #ef4444;
+  border: 2px solid #f87171;
 }
 .news-map-pin.sent-neutral .news-pin-pulse {
-  background: rgba(0, 212, 255, 0.35);
-  border: 2px solid #00d4ff;
+  background: rgba(96, 165, 250, 0.35);
+  border: 2px solid #60a5fa;
 }
 .news-pin-icon {
   position: relative;
@@ -943,8 +948,8 @@ html, body {
 .news-map-popup .news-popup-brief {
   font-size: 11px;
   line-height: 1.4;
-  color: #7dd3fc;
-  background: rgba(0, 212, 255, 0.08);
+  color: #93c5fd;
+  background: rgba(96, 165, 250, 0.08);
   border-left: 2px solid var(--accent);
   padding: 5px 8px;
   border-radius: 3px;
@@ -1031,8 +1036,8 @@ html, body {
 .inc-card-area {
   font-size: 10px;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  
+  
   font-weight: 700;
 }
 .inc-card-sev {
@@ -1040,7 +1045,7 @@ html, body {
   font-weight: 800;
   padding: 1px 6px;
   border-radius: 3px;
-  text-transform: uppercase;
+  
 }
 .inc-card-title {
   font-size: 12px;
@@ -1051,7 +1056,7 @@ html, body {
 }
 .inc-card-desc {
   font-size: 11px;
-  color: #cbd5e1;
+  color: #ececf0;
   line-height: 1.45;
   margin-bottom: 6px;
 }
@@ -1093,7 +1098,7 @@ html, body {
 .analysis-toggle-btn.active {
   background: var(--accent-dim);
   color: var(--accent);
-  box-shadow: 0 0 8px rgba(0, 212, 255, 0.25);
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.25);
 }
 
 /* ── Synchronized 10-Year Chart Grid ─────────────────────────── */
@@ -1114,7 +1119,7 @@ html, body {
 }
 .sync-chart-card.highlight-chart {
   border-color: rgba(245, 158, 11, 0.35);
-  background: linear-gradient(145deg, rgba(7, 12, 28, 0.95), rgba(245, 158, 11, 0.05));
+  background: linear-gradient(145deg, rgba(22, 22, 26, 0.95), rgba(245, 158, 11, 0.05));
 }
 .sync-chart-hdr {
   display: flex;
@@ -1125,7 +1130,7 @@ html, body {
   font-size: 12.5px;
   font-weight: 700;
   color: var(--text);
-  letter-spacing: 0.03em;
+  
 }
 .sync-chart-readout {
   font-family: var(--mono);
@@ -1170,3 +1175,12 @@ html, body {
 .cost-bar-wrapper { overflow: visible; }
 .cost-row { margin-bottom: 8px; }
 .cost-row .cost-name { white-space: normal; line-height: 1.3; }
+
+/* COT look: tabular numbers, quiet headings, no glow */
+.stat-val, .mkt-price, .sync-chart-readout, .vf-badge, .update-timestamp, .sb-val { font-variant-numeric: tabular-nums; }
+h2 { font-size: 19px; letter-spacing: -0.01em; }
+#logo { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.market-card, .model-box, .sync-chart-card, .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: none; }
+.mkt-price { font-weight: 600; }
+.mkt-label, .stat-label, .box-title, .sec-title, .leg-title { color: var(--text-dim); font-weight: 500; }
+.analysis-title-box h2 { color: var(--text); font-weight: 600; }

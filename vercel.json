@@ -1,12 +1,5 @@
 {
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py?__path__=$1"
-    },
-    {
-      "source": "/health",
-      "destination": "/api/index.py?__path__=health"
-    }
+  "headers": [
+    { "source": "/static/data/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=300" }] }
   ]
 }

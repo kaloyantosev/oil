@@ -53,6 +53,8 @@ UKMTO's incident page loads its data with JavaScript and has no public feed, so 
 ## Deployment
 
 - **Persistent host** (Render, Railway, Fly, a VM): `Procfile` runs uvicorn. Everything works, including live AIS.
-- **Vercel**: serves `public/` statically and the API from `api/index.py`. Serverless functions can't hold the AIS WebSocket or run the scheduler, so there are no live vessels. Market data works, and news refreshes on request at most every 30 min (without AI briefs).
+- **Static host** (Vercel, GitHub Pages): serves `public/` only. The dashboard reads the snapshot in `public/static/data/`, which a GitHub Action (`.github/workflows/refresh-data.yml`) rebuilds every hour with `python scripts/build_static.py`: news, alerts, futures quotes and 10-year history. No live vessels. Add a `GEMINI_API_KEY` repository secret for AI briefs and commentary.
+
+The dashboard tries `/api/*` first and switches to the snapshot when no API server answers, so the same files work on both.
 
 Not investment advice.

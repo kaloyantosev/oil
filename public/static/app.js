@@ -17,6 +17,23 @@ const ordinal = (n) => `${n}${(n % 100 >= 11 && n % 100 <= 13) ? 'th' : ({ 1: 's
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_URL     = `${wsProtocol}//${location.host}/ws/vessels`;
 const API        = '/api';
+
+// Without an API server (Vercel, GitHub Pages) the dashboard reads the hourly snapshot in
+// /static/data/, written by scripts/build_static.py. The first failed API call switches over.
+let apiDown = false;
+async function getJSON(path) {
+  if (!apiDown) {
+    try {
+      const r = await fetch(API + path);
+      if (r.ok && (r.headers.get('content-type') || '').includes('json')) return await r.json();
+    } catch (e) { /* fall through to the snapshot */ }
+    apiDown = true;
+  }
+  const name = path.split('?')[0].replace(/^\//, '');
+  const r = await fetch(`/static/data/${name}.json`, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+  return r.json();
+}
 const NEWS_MS    = 5  * 60 * 1000;   // refresh news every 5 min
 const INC_MS     = 10 * 60 * 1000;   // refresh incidents every 10 min
 const PING_MS    = 25 * 1000;        // WebSocket keep-alive ping
@@ -89,7 +106,7 @@ function shipIcon(color, headingDeg, vClass) {
 }
 
 function chokepointIcon(risk) {
-  const clr = risk === 'high' ? '#ef4444' : risk === 'medium' ? '#f59e0b' : '#22c55e';
+  const clr = risk === 'high' ? '#f87171' : risk === 'medium' ? '#fbbf24' : '#34d399';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
     <polygon points="13,2 24,23 2,23" fill="${clr}" fill-opacity=".25" stroke="${clr}" stroke-width="2"/>
     <rect x="12" y="9" width="2" height="7" fill="${clr}"/>
@@ -102,7 +119,7 @@ function chokepointIcon(risk) {
 }
 
 function incidentIcon(severity) {
-  const clr = severity === 'warning' ? '#ef4444' : '#f59e0b';
+  const clr = severity === 'warning' ? '#f87171' : '#fbbf24';
   return L.divIcon({
     html: `<div style="width:11px;height:11px;background:${clr};border:2px solid #fff;border-radius:50%;box-shadow:0 0 9px ${clr}"></div>`,
     className: 'inc-icon',
@@ -199,7 +216,7 @@ async function loadShippingLanes() {
     if (!data.features || data.features.length === 0) return;
 
     L.geoJSON(data, {
-      style: { color: '#00d4ff', weight: 1, opacity: 0.2, fillOpacity: 0 },
+      style: { color: '#60a5fa', weight: 1, opacity: 0.2, fillOpacity: 0 },
     }).addTo(map);
     console.log(`Shipping lanes: ${data.features.length} features`);
   } catch (e) {
@@ -253,7 +270,7 @@ function upsertVessel(v) {
   vesselDataStore.set(mmsi, merged);
 
   const vClass = merged.vessel_class || (merged.length >= 300 ? 'VLCC' : merged.length >= 240 ? 'Suezmax' : merged.length >= 200 ? 'Aframax' : 'Product');
-  const color = merged.color || (vClass === 'VLCC' ? '#f59e0b' : vClass === 'Suezmax' ? '#00d4ff' : vClass === 'Aframax' ? '#10b981' : '#a855f7');
+  const color = merged.color || (vClass === 'VLCC' ? '#fbbf24' : vClass === 'Suezmax' ? '#60a5fa' : vClass === 'Aframax' ? '#10b981' : '#a855f7');
   const heading = merged.heading ?? merged.cog ?? 0;
   const iconKey = `${color}|${vClass}|${Math.round(heading / 10) * 10}`;
 
@@ -402,12 +419,12 @@ function setStatus(state) {
 // ── News ──────────────────────────────────────────────────────────────────────
 async function loadNews() {
   try {
-    const { news } = await (await fetch(`${API}/news?limit=20`)).json();
+    const { news } = await getJSON('/news?limit=20');
     currentNewsArticles = news || [];
     const list = document.getElementById('news-list');
 
     if (!news || !news.length) {
-      list.innerHTML = '<div class="news-empty">No news yet. The first fetch runs at startup.</div>';
+      list.innerHTML = '<div class="news-empty">No news yet.</div>';
       return;
     }
 
@@ -425,7 +442,7 @@ async function loadNews() {
             <span class="news-date">${dateStr}</span>
           </div>
           <a class="news-title" href="${safeUrl(item.link)}" target="_blank" rel="noopener">${esc(item.title)}</a>
-          ${item.ai_brief ? `<div class="news-brief">🤖 ${esc(item.ai_brief)}</div>` : ''}
+          ${item.ai_brief ? `<div class="news-brief">${esc(item.ai_brief)}</div>` : ''}
         </div>`;
     }).join('');
   } catch (e) {
@@ -438,7 +455,7 @@ let currentIncidents = [];
 
 async function loadIncidents() {
   try {
-    const { incidents } = await (await fetch(`${API}/incidents`)).json();
+    const { incidents } = await getJSON('/incidents');
     currentIncidents = incidents || [];
 
     // Clear old markers
@@ -586,7 +603,7 @@ function geocodeNews(article) {
 
 function newsMapIcon(sentiment) {
   const sent = (sentiment || 'neutral').toLowerCase();
-  const clr = sent === 'bullish' ? '#10b981' : sent === 'bearish' ? '#ef4444' : '#00d4ff';
+  const clr = sent === 'bullish' ? '#10b981' : sent === 'bearish' ? '#f87171' : '#60a5fa';
   return L.divIcon({
     html: `
       <div class="news-map-pin">
@@ -646,7 +663,7 @@ function toggleNewsOnMap() {
         </div>
         <div class="popup-title">${esc(art.title)}</div>
         <div style="display:flex; gap:8px; align-items:center; margin:6px 0;">
-          <span style="font-size:11px; font-weight:700; color:#00d4ff;">${esc(art.source || 'News')}</span>
+          <span style="font-size:11px; font-weight:700; color:var(--accent);">${esc(art.source || 'News')}</span>
           ${sentBadge}
           <span style="font-size:11px; color:#888;">${dateStr}</span>
         </div>
@@ -709,8 +726,7 @@ async function loadAnalysis(force = false) {
   }
 
   try {
-    const res = await fetch(`${API}/analysis`);
-    const data = await res.json();
+    const data = await getJSON('/analysis');
     analysisLoaded = true;
 
     if (!data.available) {
@@ -760,7 +776,7 @@ async function loadAnalysis(force = false) {
       <div class="cost-row" title="${esc(l.note)}">
         <span class="cost-name">${esc(l.name)}</span>
         <div class="cost-bar-wrapper">
-          <div class="cost-bar" style="width:${(l.value / maxVal) * 100}%; background:${q.brent != null && q.brent >= l.value ? '#22c55e' : '#f59e0b'}"></div>
+          <div class="cost-bar" style="width:${(l.value / maxVal) * 100}%; background:${q.brent != null && q.brent >= l.value ? '#34d399' : '#fbbf24'}"></div>
           ${brentPct != null ? `<div class="brent-marker" style="left:${brentPct}%" title="Brent $${fmtNum(q.brent)}"></div>` : ''}
         </div>
         <span class="cost-val">~$${l.value}</span>
@@ -815,8 +831,7 @@ async function initOrUpdateSyncCharts() {
 
   if (!historical10yData) {
     try {
-      const res = await fetch(`${API}/historical-data`);
-      historical10yData = await res.json();
+      historical10yData = await getJSON('/historical-data');
       if (!historical10yData.available || !historical10yData.dates.length) {
         document.getElementById('market-charts-grid').innerHTML = '<div class="memo-loading">Historical data unavailable right now (Yahoo Finance did not respond).</div>';
         historical10yData = null;
@@ -831,7 +846,7 @@ async function initOrUpdateSyncCharts() {
 
   const keys = ['brent', 'wti', 'spread', 'crack', 'natgas'];
   const seriesKeysMap = { brent: 'brent', wti: 'wti', spread: 'spread', crack: 'crack_321', natgas: 'natgas' };
-  const SERIES_COLORS = { brent: '#ff6b35', wti: '#00d4ff', spread: '#a855f7', crack_321: '#f59e0b', natgas: '#38bdf8' };
+  const SERIES_COLORS = { brent: '#ff6b35', wti: '#60a5fa', spread: '#a855f7', crack_321: '#fbbf24', natgas: '#38bdf8' };
 
   keys.forEach(key => {
     const canvasId = `canvas-${key}`;
@@ -846,7 +861,7 @@ async function initOrUpdateSyncCharts() {
     const sKey = seriesKeysMap[key];
     const s = historical10yData.series[sKey];
     if (!s) return;
-    s.color = s.color || SERIES_COLORS[sKey] || '#94a3b8';
+    s.color = s.color || SERIES_COLORS[sKey] || '#91919b';
 
     const ctx = canvas.getContext('2d');
     const gradient = ctx.createLinearGradient(0, 0, 0, 200);
@@ -884,10 +899,10 @@ async function initOrUpdateSyncCharts() {
           legend: { display: false },
           tooltip: {
             enabled: true,
-            backgroundColor: 'rgba(7, 12, 28, 0.95)',
-            titleColor: '#00d4ff',
+            backgroundColor: 'rgba(22, 22, 26, 0.95)',
+            titleColor: '#60a5fa',
             bodyColor: '#f8fafc',
-            borderColor: 'rgba(0, 212, 255, 0.3)',
+            borderColor: 'rgba(96, 165, 250, 0.3)',
             borderWidth: 1,
             padding: 8,
             displayColors: false,
@@ -1100,8 +1115,7 @@ function connectWS() {
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 async function loadInitialVessels() {
   try {
-    const res = await fetch(`${API}/vessels`);
-    const data = await res.json();
+    const data = await getJSON('/vessels');
     if (data.vessels && data.vessels.length) {
       data.vessels.forEach(upsertVessel);
     }
@@ -1119,10 +1133,10 @@ async function init() {
     hostEl.textContent = `OilWatch v1.1 · ${location.host}`;
   }
   // Explain an empty map instead of leaving it mysterious.
-  fetch(`${API}/health`).then(r => r.json()).then(h => {
+  getJSON('/health').then(h => {
     if (!h.ais_enabled) {
       const el = document.getElementById('vessel-last-updated');
-      if (el) el.textContent = h.mode === 'serverless' ? 'Live AIS needs a persistent host' : 'Set AISSTREAM_API_KEY for live tankers';
+      if (el) el.textContent = h.mode !== 'persistent' ? 'Live AIS needs a persistent host' : 'Set AISSTREAM_API_KEY for live tankers';
     }
   }).catch(() => {});
 
