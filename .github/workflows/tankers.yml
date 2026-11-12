@@ -1,0 +1,38 @@
+name: Tanker snapshot
+
+# Once a day: listen to AISStream for 20 minutes and save every tanker heard.
+# Needs the AISSTREAM_API_KEY repository secret (free key from https://aisstream.io).
+on:
+  schedule:
+    - cron: '40 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install websockets python-dotenv
+      - run: python scripts/snapshot_tankers.py 20
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add public/static/data/vessels.json
+          git commit -m "data: tanker snapshot $(date -u +%Y-%m-%d)" || exit 0
+          git pull --rebase
+          git push

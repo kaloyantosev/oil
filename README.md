@@ -15,7 +15,6 @@ Everything shown is real data or clearly labelled as an estimate. When a source 
    | Key | Enables | Where |
    |---|---|---|
    | `AISSTREAM_API_KEY` | Live tanker positions | https://aisstream.io |
-   | `GEMINI_API_KEY` | AI news briefs and market commentary | https://aistudio.google.com/apikey |
    | `EIA_API_KEY` | EIA daily spot prices (`/api/oil-prices`) | https://www.eia.gov/opendata/ |
 
 3. Run `start.bat` again and open **http://localhost:8000**.
@@ -53,8 +52,12 @@ UKMTO's incident page loads its data with JavaScript and has no public feed, so 
 ## Deployment
 
 - **Persistent host** (Render, Railway, Fly, a VM): `Procfile` runs uvicorn. Everything works, including live AIS.
-- **Static host** (Vercel, GitHub Pages): serves `public/` only. The dashboard reads the snapshot in `public/static/data/`, which a GitHub Action (`.github/workflows/refresh-data.yml`) rebuilds every hour with `python scripts/build_static.py`: news, alerts, futures quotes and 10-year history. No live vessels. Add a `GEMINI_API_KEY` repository secret for AI briefs and commentary.
+- **Static host** (Vercel, GitHub Pages): serves `public/` only, from snapshots in `public/static/data/` that GitHub Actions rebuild:
+  - **Hourly** (`refresh-data.yml`, `scripts/build_static.py`): news, alerts, futures quotes and 10-year history.
+  - **Daily** (`tankers.yml`, `scripts/snapshot_tankers.py`): listens to AISStream for 20 minutes and saves every tanker heard. Add your free AISStream key as the repository secret `AISSTREAM_API_KEY` (Settings → Secrets and variables → Actions), then run the workflow once from the Actions tab.
 
-The dashboard tries `/api/*` first and switches to the snapshot when no API server answers, so the same files work on both.
+The dashboard tries `/api/*` first and switches to the snapshots when no API server answers, so the same files work on both.
+
+The map is a MapLibre globe: drag to spin it, zoom in and it flattens to a normal map.
 
 Not investment advice.

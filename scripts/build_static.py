@@ -22,7 +22,6 @@ os.environ["OILWATCH_DB"] = os.path.join(tempfile.mkdtemp(), "oilwatch.db")
 
 from analysis_engine import get_analysis, get_historical_data  # noqa: E402
 from collectors.news_collector import fetch_news  # noqa: E402
-from config import settings  # noqa: E402
 from database import get_incidents, get_news, init_db  # noqa: E402
 
 OUT = ROOT / "public" / "static" / "data"
@@ -34,14 +33,15 @@ def write(name: str, payload: dict):
 
 def main():
     init_db()
-    fetch_news(with_ai=bool(settings.GEMINI_API_KEY))
+    fetch_news(with_ai=False)
     news = get_news(100)
     if not news:
         sys.exit("No news from any feed; keeping the previous snapshot.")
 
     write("news", {"news": news, "count": len(news)})
     write("incidents", {"incidents": get_incidents()})
-    write("vessels", {"vessels": [], "count": 0, "latest_updated_at": ""})
+    if not (OUT / "vessels.json").exists():  # the daily tanker snapshot owns this file
+        write("vessels", {"vessels": [], "count": 0, "latest_updated_at": ""})
     analysis = get_analysis(news[:10])
     if analysis.get("available"):
         write("analysis", analysis)
@@ -50,7 +50,6 @@ def main():
         write("historical-data", history)
     write("health", {
         "status": "ok", "mode": "static", "ais_enabled": False,
-        "ai_enabled": bool(settings.GEMINI_API_KEY),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="minutes"),
     })
     print(f"Snapshot: {len(news)} articles, analysis {'ok' if analysis.get('available') else 'unavailable'}, "

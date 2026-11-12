@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OilWatch</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <link rel="stylesheet" href="/static/style.css?v=2"/>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css"/>
+  <link rel="stylesheet" href="/static/style.css?v=3"/>
 </head>
 <body>
 <div id="app">
@@ -31,7 +31,7 @@
       <div id="last-update-box">
         <span class="dot live" id="update-dot"></span>
         <span class="update-lbl">Last updated</span>
-        <span id="vessel-last-updated" class="update-timestamp">Waiting for AIS data</span>
+        <span id="vessel-last-updated" class="update-timestamp">Loading tankers…</span>
       </div>
     </div>
   </header>
@@ -101,9 +101,6 @@
             <button class="sb-tab-btn" id="tab-sb-incidents" onclick="switchSidebarTab('incidents')">Alerts (<span id="sb-inc-count">0</span>)</button>
           </div>
           <div class="sb-header-btns">
-            <button id="btn-plot-news" class="sb-btn" onclick="toggleNewsOnMap()" title="Distribute news geographically on the map">
-              Plot news
-            </button>
             <button id="sb-toggle" class="sb-btn" onclick="toggleSidebar()" title="Collapse feed">▶</button>
           </div>
         </div>
@@ -236,7 +233,7 @@
         </div>
 
         <!-- Core Model Comparison Grid -->
-        <div class="model-split-grid">
+        <div class="model-split-grid" style="grid-template-columns: 1fr;">
           
           <!-- Left: where prices sit -->
           <div class="model-box">
@@ -246,14 +243,6 @@
               <div class="sec-title">Brent vs reference cost &amp; fiscal levels (approximate, USD/bbl)</div>
               <div id="ref-levels"></div>
               <p class="fair-band-expl">Reference levels are public estimates for context, not a fair-value model. Oil can trade far from them for long periods.</p>
-            </div>
-          </div>
-
-          <!-- Right Column: AI Macro Synthesis Memo -->
-          <div class="model-box ai-memo-box">
-            <div class="box-title">AI commentary <span class="box-note">(optional, Gemini; based only on the facts and headlines shown)</span></div>
-            <div class="ai-memo-content" id="ai-memo-content">
-              <div class="memo-loading">Loading…</div>
             </div>
           </div>
 
@@ -274,7 +263,7 @@
 </div><!-- /#app -->
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/app.js?v=2"></script>
+<script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>

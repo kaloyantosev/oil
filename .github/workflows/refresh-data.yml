@@ -24,8 +24,6 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python scripts/build_static.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # optional: AI briefs and commentary
       - name: Commit if changed
         run: |
           if git diff --quiet public/static/data; then
@@ -36,4 +34,5 @@ jobs:
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
           git add public/static/data
           git commit -m "data: snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase
           git push

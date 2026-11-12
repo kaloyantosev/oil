@@ -58,15 +58,14 @@ function shipInfo(type) {
 
 // ── State ────────────────────────────────────────────────────────────────────
 let map;
+let mapReady = false;
 let ws;
 let sidebarOpen = true;
-const vesselMarkers = new Map();   // mmsi → L.marker
 const vesselDataStore = new Map(); // mmsi → raw vessel object
 let incidentMarkers = [];
 let currentVesselFilter = 'all';
 let currentNewsArticles = [];
 let newsMarkers = [];
-let newsOnMapVisible = false;
 
 // ── Geographic regions for news geocoding ───────────────────────────────────
 const NEWS_GEO_REGIONS = [
@@ -87,74 +86,78 @@ const NEWS_GEO_REGIONS = [
   { keywords: ['cape of good hope', 'south africa', 'cape town'], name: 'Cape of Good Hope', coords: [-34.5, 18.5] }
 ];
 
-// ── Icons ─────────────────────────────────────────────────────────────────────
-function shipIcon(color, headingDeg, vClass) {
-  const h = headingDeg || 0;
-  const w = vClass === 'VLCC' ? 16 : vClass === 'Suezmax' ? 14 : vClass === 'Aframax' ? 13 : 11;
-  const len = vClass === 'VLCC' ? 26 : vClass === 'Suezmax' ? 22 : vClass === 'Aframax' ? 20 : 17;
-
-  // Arrow-shaped SVG ship silhouette
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${len}" viewBox="0 0 14 22">
-    <polygon points="7,1 13,21 7,17 1,21" fill="${color}" stroke="rgba(0,0,0,0.7)" stroke-width="1.2"/>
-  </svg>`;
-  return L.divIcon({
-    html: `<div style="transform:rotate(${h}deg);transform-origin:50% 50%;line-height:0">${svg}</div>`,
-    className: 'ship-icon',
-    iconSize:   [w, len],
-    iconAnchor: [w / 2, len / 2],
-  });
+// ── Markers (HTML elements on the globe) ──────────────────────────────────────
+// Ports, chokepoints, alerts and news pins are few, so they are HTML markers.
+// Tankers can number in the thousands, so they are a GPU symbol layer instead (see initVesselLayer).
+function makeMarker(lat, lon, html, { anchor = 'center', z = 0, title = '', popup = null, maxWidth = 310 } = {}) {
+  const el = document.createElement('div');
+  el.className = 'map-marker';
+  el.style.zIndex = z;
+  el.innerHTML = html;
+  if (title) el.title = title;
+  const m = new maplibregl.Marker({ element: el, anchor }).setLngLat([lon, lat]);
+  if (popup) m.setPopup(new maplibregl.Popup({ maxWidth: `${maxWidth}px`, className: 'dark-popup', offset: 14 }).setHTML(popup));
+  return m;
 }
 
-function chokepointIcon(risk) {
+function chokepointHtml(risk) {
   const clr = risk === 'high' ? '#f87171' : risk === 'medium' ? '#fbbf24' : '#34d399';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
     <polygon points="13,2 24,23 2,23" fill="${clr}" fill-opacity=".25" stroke="${clr}" stroke-width="2"/>
     <rect x="12" y="9" width="2" height="7" fill="${clr}"/>
     <circle cx="13" cy="19" r="1.5" fill="${clr}"/>
   </svg>`;
-  return L.divIcon({
-    html: svg, className: 'ck-icon',
-    iconSize: [26, 26], iconAnchor: [13, 23],
-  });
 }
 
-function incidentIcon(severity) {
+function incidentHtml(severity) {
   const clr = severity === 'warning' ? '#f87171' : '#fbbf24';
-  return L.divIcon({
-    html: `<div style="width:11px;height:11px;background:${clr};border:2px solid #fff;border-radius:50%;box-shadow:0 0 9px ${clr}"></div>`,
-    className: 'inc-icon',
-    iconSize: [11, 11], iconAnchor: [5.5, 5.5],
-  });
+  return `<div style="width:11px;height:11px;background:${clr};border:2px solid #fff;border-radius:50%;box-shadow:0 0 9px ${clr}"></div>`;
 }
 
-// ── Map init ─────────────────────────────────────────────────────────────────
+function portHtml() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="10" fill="#3b82f6" fill-opacity="0.3" stroke="#60a5fa" stroke-width="2"/>
+    <path d="M12 6v12M8 10l4-4 4 4M7 16h10" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+  </svg>`;
+}
+
+// ── Map init: a globe that flattens as you zoom in ────────────────────────────
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas';
+
 function initMap() {
-  map = L.map('map', {
-    center: [20, 55],
-    zoom: 3,
-    zoomControl: false,   // Prevents overlap with #map-controls top-left
-    attributionControl: true,
-    preferCanvas: true,   // better perf for many markers
+  map = new maplibregl.Map({
+    container: 'map',
+    center: [55, 20],
+    zoom: 1.7,
+    attributionControl: { compact: true },
+    style: {
+      version: 8,
+      // Globe (vertical perspective) up to zoom 3, flat Mercator from zoom 6.
+      projection: { type: ['interpolate', ['linear'], ['zoom'], 3, 'vertical-perspective', 6, 'mercator'] },
+      sky: { 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 4, 1, 7, 0] },
+      sources: {
+        base: { type: 'raster', tiles: [`${ESRI}/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`], tileSize: 256, maxzoom: 16,
+                attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ' },
+        labels: { type: 'raster', tiles: [`${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`], tileSize: 256, maxzoom: 16 },
+      },
+      layers: [
+        { id: 'space', type: 'background', paint: { 'background-color': '#0c0c0e' } },
+        { id: 'base', type: 'raster', source: 'base' },
+        { id: 'labels', type: 'raster', source: 'labels' },
+      ],
+    },
   });
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), 'bottom-right');
 
-  // Relocate zoom control to bottom right (clean & uncluttered)
-  L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-  // ESRI World Dark Gray Canvas — Completely free, dark maritime theme, no API key required
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-    attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
-    maxZoom: 16,
-  }).addTo(map);
-
-  // Add ESRI reference labels on top so country/city borders and names stay crisp
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
-    attribution: '',
-    maxZoom: 16,
-  }).addTo(map);
-
-  loadShippingLanes();
-  loadChokepoints();
-  loadMajorPorts();
+  map.on('load', () => {
+    mapReady = true;
+    loadShippingLanes();
+    initVesselLayer();
+    loadChokepoints();
+    loadMajorPorts();
+    plotNews();
+    loadIncidentsMarkers();
+  });
 }
 
 function sanitizeSentences(text, maxSentences = 3) {
@@ -177,48 +180,28 @@ const MAJOR_OIL_PORTS = [
   { name: 'Es Sider Terminal', country: 'Libya', coords: [30.63, 18.36], type: 'Mediterranean Crude Export Port', desc: 'Libya’s largest crude oil export terminal located in the Gulf of Sirte. Connects via pipeline network to the major Waha oil fields in the Sirte Basin. Critical supplier of light sweet crude to European Mediterranean refineries.' }
 ];
 
-function portIcon() {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24">
-    <circle cx="12" cy="12" r="10" fill="#3b82f6" fill-opacity="0.3" stroke="#60a5fa" stroke-width="2"/>
-    <path d="M12 6v12M8 10l4-4 4 4M7 16h10" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
-  </svg>`;
-  return L.divIcon({
-    html: svg,
-    className: 'port-icon',
-    iconSize: [22, 22],
-    iconAnchor: [11, 11]
-  });
-}
-
 function loadMajorPorts() {
   MAJOR_OIL_PORTS.forEach(port => {
-    L.marker(port.coords, {
-      icon: portIcon(),
-      zIndexOffset: 550,
-      title: port.name
-    })
-    .bindPopup(`
-      <div style="min-width:250px">
-        <div style="font-size:10px; color:#60a5fa; text-transform:uppercase; font-weight:700; margin-bottom:2px;">⚓ Strategic Oil Port &bull; ${port.country}</div>
-        <div class="popup-title">${port.name}</div>
-        <div class="popup-row"><span class="lbl">Hub Classification</span><span class="val">${port.type}</span></div>
-        <p class="popup-desc">${sanitizeSentences(port.desc, 3)}</p>
-      </div>
-    `, { maxWidth: 310, className: 'dark-popup' })
-    .addTo(map);
+    makeMarker(port.coords[0], port.coords[1], portHtml(), {
+      z: 2, title: port.name,
+      popup: `
+        <div style="min-width:250px">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:2px;">Oil port · ${port.country}</div>
+          <div class="popup-title">${port.name}</div>
+          <div class="popup-row"><span class="lbl">Role</span><span class="val">${port.type}</span></div>
+          <p class="popup-desc">${sanitizeSentences(port.desc, 3)}</p>
+        </div>`,
+    }).addTo(map);
   });
 }
 
 async function loadShippingLanes() {
   try {
-    const r    = await fetch('/static/data/shipping_lanes.geojson');
-    const data = await r.json();
+    const data = await (await fetch('/static/data/shipping_lanes.geojson')).json();
     if (!data.features || data.features.length === 0) return;
-
-    L.geoJSON(data, {
-      style: { color: '#60a5fa', weight: 1, opacity: 0.2, fillOpacity: 0 },
-    }).addTo(map);
-    console.log(`Shipping lanes: ${data.features.length} features`);
+    map.addSource('lanes', { type: 'geojson', data });
+    map.addLayer({ id: 'lanes', type: 'line', source: 'lanes', paint: { 'line-color': '#60a5fa', 'line-opacity': 0.22, 'line-width': 1 } },
+                 map.getLayer('vessels') ? 'vessels' : undefined);
   } catch (e) {
     console.warn('Shipping lanes unavailable:', e.message);
   }
@@ -226,23 +209,12 @@ async function loadShippingLanes() {
 
 async function loadChokepoints() {
   try {
-    const r    = await fetch('/static/data/chokepoints.geojson');
-    const data = await r.json();
-
+    const data = await (await fetch('/static/data/chokepoints.geojson')).json();
     data.features.forEach(f => {
-      const p  = f.properties;
+      const p = f.properties;
       const [lon, lat] = f.geometry.coordinates;
-
-      L.marker([lat, lon], {
-        icon: chokepointIcon(p.risk_level),
-        zIndexOffset: 600,
-        title: p.name,
-      })
-      .bindPopup(buildChokepointPopup(p), { maxWidth: 310, className: 'dark-popup' })
-      .addTo(map);
+      makeMarker(lat, lon, chokepointHtml(p.risk_level), { anchor: 'bottom', z: 3, title: p.name, popup: buildChokepointPopup(p) }).addTo(map);
     });
-
-    console.log(`Chokepoints: ${data.features.length} loaded`);
   } catch (e) {
     console.warn('Chokepoints unavailable:', e.message);
   }
@@ -252,59 +224,76 @@ function buildChokepointPopup(p) {
   const riskClass = `risk-${p.risk_level}`;
   return `
     <div style="min-width:250px">
-      <div class="popup-title">⬡ ${p.name}</div>
-      <div class="popup-row"><span class="lbl">Daily Volume</span><span class="val">${p.volume_mbpd}M bbl/day</span></div>
-      <div class="popup-row"><span class="lbl">Risk Level</span><span class="val ${riskClass}">${p.risk_level.toUpperCase()}</span></div>
+      <div class="popup-title">${p.name}</div>
+      <div class="popup-row"><span class="lbl">Daily volume</span><span class="val">${p.volume_mbpd}M bbl/day</span></div>
+      <div class="popup-row"><span class="lbl">Risk level</span><span class="val ${riskClass}">${p.risk_level}</span></div>
       <p class="popup-desc">${sanitizeSentences(p.description, 3)}</p>
     </div>`;
 }
 
-// ── Vessel markers ────────────────────────────────────────────────────────────
+// ── Vessels: one GeoJSON source, arrows rotated by heading ────────────────────
+const vesselClassOf = (v) => v.vessel_class || (v.length >= 300 ? 'VLCC' : v.length >= 240 ? 'Suezmax' : v.length >= 200 ? 'Aframax' : 'Product');
+const CLASS_COLOR = { VLCC: '#fbbf24', Suezmax: '#60a5fa', Aframax: '#10b981', Product: '#a855f7' };
+
+function initVesselLayer() {
+  // White arrow drawn once; the layer tints it per class (SDF icon).
+  const s = 44, c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.beginPath(); g.moveTo(s / 2, 2); g.lineTo(s - 8, s - 3); g.lineTo(s / 2, s - 12); g.lineTo(8, s - 3); g.closePath(); g.fill();
+  map.addImage('ship', g.getImageData(0, 0, s, s), { sdf: true, pixelRatio: 2 });
+
+  map.addSource('vessels', { type: 'geojson', data: vesselGeoJSON() });
+  map.addLayer({
+    id: 'vessels', type: 'symbol', source: 'vessels',
+    layout: {
+      'icon-image': 'ship',
+      'icon-size': ['match', ['get', 'cls'], 'VLCC', 1.0, 'Suezmax', 0.88, 'Aframax', 0.78, 0.68],
+      'icon-rotate': ['get', 'heading'],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+    paint: { 'icon-color': ['get', 'color'], 'icon-halo-color': 'rgba(0,0,0,0.7)', 'icon-halo-width': 1 },
+  });
+  map.on('click', 'vessels', (e) => {
+    const v = vesselDataStore.get(String(e.features[0].properties.mmsi));
+    if (!v) return;
+    const cls = vesselClassOf(v);
+    new maplibregl.Popup({ maxWidth: '300px', className: 'dark-popup', offset: 10 })
+      .setLngLat([v.lon, v.lat]).setHTML(buildVesselPopup(v, cls, CLASS_COLOR[cls])).addTo(map);
+  });
+  map.on('mouseenter', 'vessels', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'vessels', () => { map.getCanvas().style.cursor = ''; });
+  applyVesselFilter();
+}
+
+function vesselGeoJSON() {
+  const features = [];
+  for (const v of vesselDataStore.values()) {
+    const cls = vesselClassOf(v);
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [v.lon, v.lat] },
+      properties: { mmsi: String(v.mmsi), cls, color: CLASS_COLOR[cls], heading: v.heading ?? v.cog ?? 0 },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+let vesselRefreshPending = false;
 function upsertVessel(v) {
   if (v.lat == null || v.lon == null) return;
   const mmsi = String(v.mmsi);
-
-  // Merge into vessel data store
-  const existing = vesselDataStore.get(mmsi) || {};
-  const merged = { ...existing, ...v };
-  vesselDataStore.set(mmsi, merged);
-
-  const vClass = merged.vessel_class || (merged.length >= 300 ? 'VLCC' : merged.length >= 240 ? 'Suezmax' : merged.length >= 200 ? 'Aframax' : 'Product');
-  const color = merged.color || (vClass === 'VLCC' ? '#fbbf24' : vClass === 'Suezmax' ? '#60a5fa' : vClass === 'Aframax' ? '#10b981' : '#a855f7');
-  const heading = merged.heading ?? merged.cog ?? 0;
-  const iconKey = `${color}|${vClass}|${Math.round(heading / 10) * 10}`;
-
-  if (vesselMarkers.has(mmsi)) {
-    const m = vesselMarkers.get(mmsi);
-    m.setLatLng([merged.lat, merged.lon]);
-    if (m._iconKey !== iconKey) {
-      m.setIcon(shipIcon(color, heading, vClass));
-      m._iconKey = iconKey;
-    }
-    if (m.isPopupOpen()) m.setPopupContent(buildVesselPopup(merged, vClass, color));
-  } else {
-    const m = L.marker([merged.lat, merged.lon], { icon: shipIcon(color, heading, vClass), zIndexOffset: 200, title: merged.name || mmsi });
-    m._iconKey = iconKey;
-    // Build popup HTML lazily, from the latest data, when it is opened.
-    m.bindPopup(() => {
-      const v = vesselDataStore.get(mmsi) || merged;
-      return buildVesselPopup(v, v.vessel_class || vClass, v.color || color);
-    }, { maxWidth: 300, className: 'dark-popup' });
-    vesselMarkers.set(mmsi, m);
-    // Add to map only if matches active filter
-    if (currentVesselFilter === 'all' || vClass === currentVesselFilter) {
-      m.addTo(map);
-    }
-  }
-
-  scheduleCountUpdate();
-}
-
-let countUpdatePending = false;
-function scheduleCountUpdate() {
-  if (countUpdatePending) return;
-  countUpdatePending = true;
-  requestAnimationFrame(() => { countUpdatePending = false; updateFilterCounts(); });
+  vesselDataStore.set(mmsi, { ...(vesselDataStore.get(mmsi) || {}), ...v });
+  if (vesselRefreshPending) return;
+  vesselRefreshPending = true;
+  requestAnimationFrame(() => {
+    vesselRefreshPending = false;
+    if (mapReady && map.getSource('vessels')) map.getSource('vessels').setData(vesselGeoJSON());
+    updateFilterCounts();
+  });
 }
 
 function buildVesselPopup(v, vClass, color) {
@@ -322,7 +311,7 @@ function buildVesselPopup(v, vClass, color) {
         <span class="tanker-class-tag" style="background:${color}22; color:${color}; border:1px solid ${color}66;">${esc(v.vessel_desc || vClass)}</span>
         <span class="cargo-pill ${cargoClass}" title="Estimated from crew-entered AIS draught">${esc(cargo)}</span>
       </div>
-      <div class="popup-title">🚢 ${name}</div>
+      <div class="popup-title">${name}</div>
       <div class="popup-row"><span class="lbl">MMSI</span><span class="val">${esc(v.mmsi)}</span></div>
       <div class="popup-row"><span class="lbl">Length · draught</span><span class="val">${esc(v.length || '—')} m · ${draught}</span></div>
       <div class="popup-row"><span class="lbl">Speed · course</span><span class="val">${speed} · ${Math.round(v.cog || 0)}° ${v.motion === 'Stationary' ? '(stationary)' : ''}</span></div>
@@ -342,50 +331,28 @@ function setVesselFilter(filterClass) {
 }
 
 function applyVesselFilter() {
-  if (currentVesselFilter === 'incidents') {
-    // Hide all vessels, keep map focused on incidents
-    for (const m of vesselMarkers.values()) {
-      if (map.hasLayer(m)) m.remove();
-    }
-    document.getElementById('vessel-count').textContent = '0 (Incidents Mode)';
+  if (!mapReady || !map.getLayer('vessels')) return;
+  const f = currentVesselFilter;
+  map.setLayoutProperty('vessels', 'visibility', f === 'incidents' ? 'none' : 'visible');
+  map.setFilter('vessels', f === 'all' || f === 'incidents' ? null : ['==', ['get', 'cls'], f]);
+  if (f === 'incidents') {
+    document.getElementById('vessel-count').textContent = '0';
     showIncidentsFeed();
     return;
   }
-
-  let visibleCount = 0;
-  for (const [mmsi, m] of vesselMarkers.entries()) {
-    const v = vesselDataStore.get(mmsi);
-    const vClass = v ? (v.vessel_class || (v.length >= 300 ? 'VLCC' : v.length >= 240 ? 'Suezmax' : v.length >= 200 ? 'Aframax' : 'Product')) : 'Product';
-    const match = currentVesselFilter === 'all' || vClass === currentVesselFilter;
-    if (match) {
-      if (!map.hasLayer(m)) m.addTo(map);
-      visibleCount++;
-    } else {
-      if (map.hasLayer(m)) m.remove();
-    }
-  }
-  document.getElementById('vessel-count').textContent = visibleCount;
+  updateFilterCounts();
 }
 
 function updateFilterCounts() {
-  let total = 0, vlcc = 0, suez = 0, afra = 0, prod = 0;
-  for (const v of vesselDataStore.values()) {
-    total++;
-    const vClass = v.vessel_class || (v.length >= 300 ? 'VLCC' : v.length >= 240 ? 'Suezmax' : v.length >= 200 ? 'Aframax' : 'Product');
-    if (vClass === 'VLCC') vlcc++;
-    else if (vClass === 'Suezmax') suez++;
-    else if (vClass === 'Aframax') afra++;
-    else prod++;
-  }
+  const n = { all: 0, VLCC: 0, Suezmax: 0, Aframax: 0, Product: 0 };
+  for (const v of vesselDataStore.values()) { n.all++; n[vesselClassOf(v)]++; }
   const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  setEl('vf-all', total);
-  setEl('vf-vlcc', vlcc);
-  setEl('vf-suez', suez);
-  setEl('vf-afra', afra);
-  setEl('vf-prod', prod);
-  if (currentVesselFilter === 'all') {
-    setEl('vessel-count', total);
-  }
+  setEl('vf-all', n.all);
+  setEl('vf-vlcc', n.VLCC);
+  setEl('vf-suez', n.Suezmax);
+  setEl('vf-afra', n.Aframax);
+  setEl('vf-prod', n.Product);
+  if (currentVesselFilter !== 'incidents') setEl('vessel-count', currentVesselFilter === 'all' ? n.all : n[currentVesselFilter]);
 }
 
 // ── Last Updated Formatter ──────────────────────────────────────────────────
@@ -397,16 +364,13 @@ function formatUtcTimestamp(dateObj) {
   const year = dateObj.getUTCFullYear();
   const hours = String(dateObj.getUTCHours()).padStart(2, '0');
   const mins = String(dateObj.getUTCMinutes()).padStart(2, '0');
-  const secs = String(dateObj.getUTCSeconds()).padStart(2, '0');
-  return `${day} ${month} ${year}, ${hours}:${mins}:${secs} UTC`;
+  return `${day} ${month} ${year}, ${hours}:${mins} UTC`;
 }
 
 function updateLastSeenTimestamp(isoDateStr) {
   const el = document.getElementById('vessel-last-updated');
-  if (!el) return;
-  if (!isoDateStr) return;
-  const d = new Date(isoDateStr);
-  el.textContent = formatUtcTimestamp(d);
+  if (!el || !isoDateStr) return;
+  el.textContent = `Tankers as of ${formatUtcTimestamp(new Date(isoDateStr))}`;
 }
 
 function setStatus(state) {
@@ -433,7 +397,7 @@ async function loadNews() {
         ? new Date(item.published).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })
         : '';
       const sent = ['bullish', 'bearish'].includes(item.sentiment) ? item.sentiment : 'neutral';
-      const sentBadge = `<span class="news-sentiment sent-${sent}" title="Keyword-based tone for oil prices, not a forecast">${sent.toUpperCase()}</span>`;
+      const sentBadge = `<span class="news-sentiment sent-${sent}" title="Keyword-based tone for oil prices, not a forecast">${sent}</span>`;
       return `
         <div class="news-card">
           <div class="news-meta">
@@ -442,9 +406,9 @@ async function loadNews() {
             <span class="news-date">${dateStr}</span>
           </div>
           <a class="news-title" href="${safeUrl(item.link)}" target="_blank" rel="noopener">${esc(item.title)}</a>
-          ${item.ai_brief ? `<div class="news-brief">${esc(item.ai_brief)}</div>` : ''}
         </div>`;
     }).join('');
+    plotNews();
   } catch (e) {
     console.warn('News unavailable:', e.message);
   }
@@ -453,49 +417,43 @@ async function loadNews() {
 // ── Incidents ─────────────────────────────────────────────────────────────────
 let currentIncidents = [];
 
-async function loadIncidents() {
-  try {
-    const { incidents } = await getJSON('/incidents');
-    currentIncidents = incidents || [];
-
-    // Clear old markers
-    incidentMarkers.forEach(m => m.remove());
-    incidentMarkers = [];
-
-    let visibleCount = 0;
-    (currentIncidents || []).forEach(inc => {
-      if (inc.lat == null || inc.lon == null) return;
-
-      const m = L.marker([inc.lat, inc.lon], {
-        icon: incidentIcon(inc.severity),
-        zIndexOffset: 1000,
-        title: inc.title,
-      });
-
-      const shortDesc = sanitizeSentences(inc.description, 3);
-      const sev = inc.severity === 'warning' ? 'warning' : 'advisory';
-      m.bindPopup(`
+function loadIncidentsMarkers() {
+  if (!mapReady) return;
+  incidentMarkers.forEach(m => m.remove());
+  incidentMarkers = [];
+  currentIncidents.forEach(inc => {
+    if (inc.lat == null || inc.lon == null) return;
+    const shortDesc = sanitizeSentences(inc.description, 3);
+    const sev = inc.severity === 'warning' ? 'warning' : 'advisory';
+    const m = makeMarker(inc.lat, inc.lon, incidentHtml(inc.severity), {
+      z: 5, title: inc.title, maxWidth: 300,
+      popup: `
         <div>
-          <div class="popup-title">⚠ ${esc(inc.title)}</div>
+          <div class="popup-title">${esc(inc.title)}</div>
           <div class="popup-row"><span class="lbl">Area</span><span class="val">${esc(inc.area || '—')} (area-level position)</span></div>
-          <div class="popup-row"><span class="lbl">Type</span><span class="val risk-${sev}">${sev.toUpperCase()}</span></div>
+          <div class="popup-row"><span class="lbl">Type</span><span class="val risk-${sev}">${sev}</span></div>
           <div class="popup-row"><span class="lbl">Source</span><span class="val">${esc(inc.source || 'News')}</span></div>
           ${shortDesc ? `<p class="popup-desc">${esc(shortDesc)}</p>` : ''}
           ${inc.link ? `<a class="popup-link" href="${safeUrl(inc.link)}" target="_blank" rel="noopener">Read the report ↗</a>` : ''}
-        </div>
-      `, { maxWidth: 300, className: 'dark-popup' });
+        </div>`,
+    }).addTo(map);
+    m._lat = inc.lat; m._lon = inc.lon;
+    incidentMarkers.push(m);
+  });
+}
 
-      m.addTo(map);
-      incidentMarkers.push(m);
-      visibleCount++;
-    });
+async function loadIncidents() {
+  try {
+    const { incidents } = await getJSON('/incidents');
+    currentIncidents = (incidents || []).filter(i => i.lat != null && i.lon != null);
+    loadIncidentsMarkers();
 
+    const visibleCount = currentIncidents.length;
     const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
     setEl('incident-count', visibleCount);
     setEl('sb-inc-count', visibleCount);
     setEl('vf-inc', visibleCount);
 
-    // Populate the sidebar incidents feed
     const incList = document.getElementById('incidents-list');
     if (incList) {
       if (!currentIncidents.length) {
@@ -509,8 +467,8 @@ async function loadIncidents() {
           return `
             <div class="inc-card" data-idx="${i}">
               <div class="inc-card-hdr">
-                <span class="inc-card-area">📍 ${esc(inc.area || 'Maritime area')}</span>
-                <span class="inc-card-sev ${sevClass}">${inc.severity === 'warning' ? 'WARNING' : 'ADVISORY'}</span>
+                <span class="inc-card-area">${esc(inc.area || 'Maritime area')}</span>
+                <span class="inc-card-sev ${sevClass}">${inc.severity === 'warning' ? 'Warning' : 'Advisory'}</span>
               </div>
               <div class="inc-card-title">${esc(inc.title)}</div>
               <div class="inc-card-desc">${esc(shortDesc)}</div>
@@ -535,22 +493,18 @@ async function loadIncidents() {
 
 function flyToIncident(lat, lon) {
   if (lat == null || lon == null || !map) return;
-  map.flyTo([lat, lon], 7, { duration: 1.2 });
-  const m = incidentMarkers.find(marker => {
-    const pos = marker.getLatLng();
-    return Math.abs(pos.lat - lat) < 0.001 && Math.abs(pos.lng - lon) < 0.001;
-  });
-  if (m) {
-    setTimeout(() => m.openPopup(), 1250);
-  }
+  map.flyTo({ center: [lon, lat], zoom: 7, duration: 1500 });
+  const m = incidentMarkers.find(mk => Math.abs(mk._lat - lat) < 0.001 && Math.abs(mk._lon - lon) < 0.001);
+  if (m) map.once('moveend', () => { if (!m.getPopup().isOpen()) m.togglePopup(); });
 }
 
 function showIncidentsFeed() {
   if (!sidebarOpen) toggleSidebar();
   switchSidebarTab('incidents');
   if (incidentMarkers.length > 0 && map) {
-    const group = L.featureGroup(incidentMarkers);
-    map.flyToBounds(group.getBounds(), { padding: [60, 60], maxZoom: 6, duration: 1.2 });
+    const b = new maplibregl.LngLatBounds();
+    incidentMarkers.forEach(m => b.extend(m.getLngLat()));
+    map.fitBounds(b, { padding: 60, maxZoom: 6, duration: 1500 });
   }
 }
 
@@ -569,118 +523,63 @@ function toggleSidebar() {
   sidebarOpen = !sidebarOpen;
   const sb = document.getElementById('sidebar');
   const reopenBtn = document.getElementById('sidebar-reopen-btn');
-  if (sidebarOpen) {
-    if (sb) sb.classList.remove('collapsed');
-    if (reopenBtn) reopenBtn.classList.remove('visible');
-  } else {
-    if (sb) sb.classList.add('collapsed');
-    if (reopenBtn) reopenBtn.classList.add('visible');
-  }
-  if (map) {
-    setTimeout(() => map.invalidateSize(), 300);
-  }
+  if (sb) sb.classList.toggle('collapsed', !sidebarOpen);
+  if (reopenBtn) reopenBtn.classList.toggle('visible', !sidebarOpen);
+  if (map) setTimeout(() => map.resize(), 300);
 }
 
-// ── Geographic News Distribution on Map ──────────────────────────────────────
+// ── News pins: always on the map, at the region the article names ─────────────
 function geocodeNews(article) {
-  const text = `${article.title || ''} ${article.summary || ''} ${article.ai_brief || ''}`.toLowerCase();
+  const text = `${article.title || ''} ${article.summary || ''}`.toLowerCase();
   for (const region of NEWS_GEO_REGIONS) {
     if (region.keywords.some(kw => text.includes(kw))) {
-      // Add slight jitter so multiple pins in the same region don't perfectly overlap
+      // Jitter so several pins in one region don't overlap exactly
       let h = 0;
       for (const ch of (article.link || article.title || '')) h = (h * 31 + ch.charCodeAt(0)) | 0;
-      const jitterLat = (((h & 0xff) / 255) - 0.5) * 1.5;
-      const jitterLon = ((((h >> 8) & 0xff) / 255) - 0.5) * 2.0;
       return {
-        lat: region.coords[0] + jitterLat,
-        lon: region.coords[1] + jitterLon,
-        regionName: region.name
+        lat: region.coords[0] + (((h & 0xff) / 255) - 0.5) * 1.5,
+        lon: region.coords[1] + ((((h >> 8) & 0xff) / 255) - 0.5) * 2.0,
+        regionName: region.name,
       };
     }
   }
   return null;
 }
 
-function newsMapIcon(sentiment) {
+function newsPinHtml(sentiment) {
   const sent = (sentiment || 'neutral').toLowerCase();
-  const clr = sent === 'bullish' ? '#10b981' : sent === 'bearish' ? '#f87171' : '#60a5fa';
-  return L.divIcon({
-    html: `
-      <div class="news-map-pin">
-        <div class="news-pin-pulse" style="border-color:${clr}; background:${clr}33;"></div>
-        <div class="news-pin-icon" style="background:${clr};">📰</div>
-      </div>
-    `,
-    className: 'news-pin-wrapper',
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -14]
-  });
+  const clr = sent === 'bullish' ? '#34d399' : sent === 'bearish' ? '#f87171' : '#60a5fa';
+  return `
+    <div class="news-map-pin">
+      <div class="news-pin-pulse" style="border-color:${clr}; background:${clr}33;"></div>
+      <div class="news-pin-icon" style="background:${clr};"></div>
+    </div>`;
 }
 
-function toggleNewsOnMap() {
-  newsOnMapVisible = !newsOnMapVisible;
-  const btn = document.getElementById('btn-plot-news');
-
-  if (!newsOnMapVisible) {
-    newsMarkers.forEach(m => m.remove());
-    newsMarkers = [];
-    if (btn) {
-      btn.classList.remove('active');
-      btn.textContent = '📍 Plot on Map';
-    }
-    return;
-  }
-
-  if (btn) {
-    btn.classList.add('active');
-    btn.textContent = '✖ Clear Pins';
-  }
-
-  // Clear any existing pins
+function plotNews() {
+  if (!mapReady) return;
   newsMarkers.forEach(m => m.remove());
   newsMarkers = [];
-
-  const plottedBounds = [];
-
   (currentNewsArticles || []).forEach(art => {
     const loc = geocodeNews(art);
     if (!loc) return;
-
-    const icon = newsMapIcon(art.sentiment);
-    const m = L.marker([loc.lat, loc.lon], { icon, zIndexOffset: 700 });
-
     const sent = (art.sentiment || 'neutral').toLowerCase();
-    const sentBadge = `<span class="news-sentiment sent-${sent}">${sent.toUpperCase()}</span>`;
     const dateStr = art.published
       ? new Date(art.published).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })
       : '';
-
     const popupHtml = `
       <div class="news-map-popup">
-        <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px;">
-          📍 ${esc(loc.regionName)} (approximate)
-        </div>
+        <div style="font-size:12px; color:var(--text-dim); margin-bottom:4px;">${esc(loc.regionName)} (approximate)</div>
         <div class="popup-title">${esc(art.title)}</div>
         <div style="display:flex; gap:8px; align-items:center; margin:6px 0;">
-          <span style="font-size:11px; font-weight:700; color:var(--accent);">${esc(art.source || 'News')}</span>
-          ${sentBadge}
-          <span style="font-size:11px; color:#888;">${dateStr}</span>
+          <span style="font-size:12px; font-weight:600; color:var(--accent);">${esc(art.source || 'News')}</span>
+          <span class="news-sentiment sent-${sent}">${sent}</span>
+          <span style="font-size:12px; color:var(--text-dim);">${dateStr}</span>
         </div>
-        ${art.ai_brief ? `<div class="news-brief" style="margin-top:6px; font-size:11.5px; line-height:1.4;">🤖 ${esc(art.ai_brief)}</div>` : ''}
-        ${art.link ? `<a class="popup-link" href="${safeUrl(art.link)}" target="_blank" rel="noopener" style="margin-top:8px; display:inline-block;">Read original article ↗</a>` : ''}
-      </div>
-    `;
-
-    m.bindPopup(popupHtml, { maxWidth: 320, className: 'dark-popup' });
-    m.addTo(map);
-    newsMarkers.push(m);
-    plottedBounds.push([loc.lat, loc.lon]);
+        ${art.link ? `<a class="popup-link" href="${safeUrl(art.link)}" target="_blank" rel="noopener" style="margin-top:8px; display:inline-block;">Read the article ↗</a>` : ''}
+      </div>`;
+    newsMarkers.push(makeMarker(loc.lat, loc.lon, newsPinHtml(art.sentiment), { z: 4, title: art.title, popup: popupHtml, maxWidth: 320 }).addTo(map));
   });
-
-  if (plottedBounds.length > 0) {
-    map.flyToBounds(plottedBounds, { padding: [50, 50], maxZoom: 5, duration: 1.5 });
-  }
 }
 
 // ── Clock ─────────────────────────────────────────────────────────────────────
@@ -705,9 +604,7 @@ function switchView(viewName) {
   if (viewName === 'map') {
     document.getElementById('tab-map-btn').classList.add('active');
     document.getElementById('view-map').classList.add('active');
-    if (map) {
-      setTimeout(() => map.invalidateSize(), 150);
-    }
+    if (map) setTimeout(() => map.resize(), 150);
   } else if (viewName === 'analysis') {
     document.getElementById('tab-analysis-btn').classList.add('active');
     document.getElementById('view-analysis').classList.add('active');
@@ -719,11 +616,7 @@ function switchView(viewName) {
 let analysisLoaded = false;
 
 async function loadAnalysis(force = false) {
-  const memoEl = document.getElementById('ai-memo-content');
   const factsEl = document.getElementById('facts-list');
-  if (force || !analysisLoaded) {
-    memoEl.innerHTML = '<div class="memo-loading">Loading…</div>';
-  }
 
   try {
     const data = await getJSON('/analysis');
@@ -731,7 +624,6 @@ async function loadAnalysis(force = false) {
 
     if (!data.available) {
       factsEl.innerHTML = `<li>${esc(data.error || 'Market data unavailable.')}</li>`;
-      memoEl.innerHTML = '<div class="memo-loading">No commentary without market data.</div>';
       return;
     }
 
@@ -784,15 +676,9 @@ async function loadAnalysis(force = false) {
 
     const asof = q.brent_asof || q.wti_asof;
     setText('analysis-sub', `Front-month futures${asof ? ` as of ${asof}` : ''}, each ranked against its own last 5 years · source: Yahoo Finance`);
-
-    if (data.ai_commentary) {
-      memoEl.textContent = data.ai_commentary;
-    } else {
-      memoEl.innerHTML = '<div class="memo-loading">Set GEMINI_API_KEY to add AI commentary. The facts on the left are computed directly from market data.</div>';
-    }
   } catch (e) {
     console.error('Error loading analysis:', e);
-    memoEl.innerHTML = `<div class="memo-loading" style="color:var(--danger)">Failed to load market data: ${esc(e.message)}</div>`;
+    factsEl.innerHTML = `<li style="color:var(--danger)">Failed to load market data: ${esc(e.message)}</li>`;
   }
 }
 
@@ -1092,12 +978,13 @@ function connectWS() {
     };
 
     ws.onerror = () => {
-      startVesselPollingFallback();
+      if (!apiDown) startVesselPollingFallback();
     };
 
     ws.onclose = () => {
       setStatus('connecting');
       clearInterval(ws._pingInterval);
+      if (apiDown) return; // static host: the daily snapshot is all there is
       startVesselPollingFallback();
       // Try to reconnect in 15 seconds if on standard persistent host
       setTimeout(() => {
@@ -1133,12 +1020,6 @@ async function init() {
     hostEl.textContent = `OilWatch v1.1 · ${location.host}`;
   }
   // Explain an empty map instead of leaving it mysterious.
-  getJSON('/health').then(h => {
-    if (!h.ais_enabled) {
-      const el = document.getElementById('vessel-last-updated');
-      if (el) el.textContent = h.mode !== 'persistent' ? 'Live AIS needs a persistent host' : 'Set AISSTREAM_API_KEY for live tankers';
-    }
-  }).catch(() => {});
 
   initMap();
   connectWS();
@@ -1146,6 +1027,10 @@ async function init() {
 
   // Initial data load
   await Promise.allSettled([loadInitialVessels(), loadNews(), loadIncidents()]);
+  if (!vesselDataStore.size) {
+    const el = document.getElementById('vessel-last-updated');
+    if (el) el.textContent = 'No tanker snapshot yet';
+  }
 
   // Polling
   setInterval(loadNews,     NEWS_MS);
