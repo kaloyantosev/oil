@@ -127,7 +127,7 @@ const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas';
 function initMap() {
   map = new maplibregl.Map({
     container: 'map',
-    center: [55, 20],
+    center: [15, 50], // Europe
     zoom: 1.7,
     attributionControl: { compact: true },
     style: {
