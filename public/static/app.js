@@ -249,7 +249,10 @@ function initVesselLayer() {
     id: 'vessels', type: 'symbol', source: 'vessels',
     layout: {
       'icon-image': 'ship',
-      'icon-size': ['match', ['get', 'cls'], 'VLCC', 1.0, 'Suezmax', 0.88, 'Aframax', 0.78, 0.68],
+      // bigger on the zoomed-out globe so a single tanker is still visible
+      'icon-size': ['interpolate', ['linear'], ['zoom'],
+        1, ['match', ['get', 'cls'], 'VLCC', 1.9, 'Suezmax', 1.7, 'Aframax', 1.5, 1.3],
+        7, ['match', ['get', 'cls'], 'VLCC', 1.1, 'Suezmax', 0.95, 'Aframax', 0.85, 0.75]],
       'icon-rotate': ['get', 'heading'],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap': true,
